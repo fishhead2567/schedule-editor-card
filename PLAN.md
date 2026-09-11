@@ -119,12 +119,12 @@ section for the full reasoning).
 - No literal click-through HACS "custom repository" install has been done
   (deliberately — see Milestone 2 for why). The release + HACS-validator
   path that install would rely on is confirmed working.
-- No editing of an *existing* block's times (only add new / remove existing)
-  — no click-to-edit or drag-to-resize.
-- No overlap check against blocks already saved server-side beyond the
-  client-side `hasOverlap` pre-check (the native `schedule` domain may also
-  reject overlaps itself server-side — not yet confirmed what error shape
-  that produces, so the card doesn't handle it explicitly).
+- ~~No editing of an existing block's times~~ — done, see Milestone 1.
+- ~~No overlap check against already-saved blocks~~ — the native domain does
+  reject overlaps server-side (confirmed), and the card's error display now
+  correctly surfaces that message (was a real bug, now fixed and
+  unit-tested) — see Milestone 1. No drag-to-resize still (click + time
+  inputs only) — that remains a Milestone 3 nice-to-have, not required.
 - No handling of the `icon` field being changed after creation (set once at
   create time, no rename/re-icon affordance).
 - No visual editor (`getConfigElement`) for the card's own YAML config in
@@ -147,7 +147,7 @@ section for the full reasoning).
 
 ## Milestones
 
-### Milestone 1 — Core editor (mostly done)
+### Milestone 1 — Core editor (done)
 Goal: a working, tested, CI-green schedule CRUD card.
 - [x] Scaffold repo, tooling, CI.
 - [x] Card renders schedules + weekly timeline + now-cursor.
@@ -155,11 +155,29 @@ Goal: a working, tested, CI-green schedule CRUD card.
 - [x] Add / remove a block on a day.
 - [x] Unit tests for time/overlap math.
 - [x] Verified rendering + interaction against a real disposable HA instance.
-- [ ] Edit an existing block's times in place (not just add new / delete).
-- [ ] Confirm/handle server-side overlap rejection gracefully (currently
-      only pre-checked client-side).
-- [ ] Dark theme visual check.
-- [ ] Narrow-viewport (phone width) visual check.
+- [x] Edit an existing block's times in place — click the pencil icon on a
+      block chip, it becomes two inline time inputs + save/cancel. Verified
+      live (clicked through the real UI, changed a block's times, confirmed
+      the change persisted server-side via `schedule/list`).
+- [x] Confirm/handle server-side overlap rejection gracefully — **found a
+      real related bug while checking this**: HA's websocket connection
+      rejects `sendMessagePromise` with a plain `{code, message}` object,
+      not an `Error` instance, so the card's `e instanceof Error ? ... :
+      String(e)` pattern would have silently shown "[object Object]" for
+      exactly the errors this needed to surface (confirmed the native
+      domain does reject overlaps server-side, message: `"Overlapping
+      times found in schedule at 'monday'. Got [...]"`, via a direct
+      websocket test bypassing the card entirely). Fixed with a shared
+      `errorMessage()` helper (`schedule-api.ts`) handling both shapes,
+      unit-tested against the exact real error shape. Used everywhere the
+      card catches an error, not just the overlap path.
+- [x] Dark theme visual check — passes with zero code changes, confirmed by
+      screenshot; styling already used HA's CSS custom properties
+      throughout (`--divider-color`, `--state-active-color`, etc.) rather
+      than hardcoded colors.
+- [x] Narrow-viewport (phone width, 390px) visual check — passes with zero
+      code changes, confirmed by screenshot; no horizontal overflow or
+      cramped controls.
 
 ### Milestone 2 — First real release (done, with one deliberate exception)
 Goal: prove the actual HACS distribution path works, not just CI.
@@ -192,12 +210,18 @@ Goal: prove the actual HACS distribution path works, not just CI.
       (192.168.1.206) as a custom repository — their call, their login.
 
 ### Milestone 3 — Polish
+- [x] ~~Edit-in-place for existing blocks~~ — moved to and done under
+      Milestone 1 (it's core CRUD completeness, not really "polish" in
+      hindsight).
+- [x] ~~Dark theme / mobile viewport checks~~ — moved to and done under
+      Milestone 1 for the same reason.
 - [ ] Visual config editor (`getConfigElement`) so the card can be added
       through the dashboard UI picker without hand-written YAML.
-- [ ] Edit-in-place for existing blocks.
-- [ ] Basic accessibility pass.
+- [ ] Basic accessibility pass (this is genuinely UI-facing — hold for the
+      user's UI feedback pass rather than guessing at it).
 - [ ] Consider drag-to-create/resize on the timeline bars (nice-to-have,
-      not required — click + time-inputs already works).
+      not required — click + time-inputs already works; also hold for UI
+      feedback rather than building speculatively).
 
 ### Milestone 4 — Entity selection (confirmed in scope 2026-09-11, sequenced after Milestones 1-3)
 Goal: let one card row show/edit **one or more entities (including

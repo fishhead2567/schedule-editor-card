@@ -1,7 +1,7 @@
 import { LitElement, html, css, PropertyValues, TemplateResult, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { CardConfig, HomeAssistant, ScheduleBlock, ScheduleRecord, WEEKDAYS, Weekday } from "./types";
-import { createSchedule, daysOf, deleteSchedule, listSchedules, updateSchedule, emptyDays } from "./schedule-api";
+import { createSchedule, daysOf, deleteSchedule, errorMessage, listSchedules, updateSchedule, emptyDays } from "./schedule-api";
 import { currentMinutesOfDay, hasOverlap, percentOfDay, toMinutes } from "./time-utils";
 
 const DAY_LABEL: Record<Weekday, string> = {
@@ -26,6 +26,8 @@ export class ScheduleEditorCard extends LitElement {
   @state() private error: string | null = null;
   @state() private openEditor: { scheduleId: string; day: Weekday } | null = null;
   @state() private newBlockDraft: { from: string; to: string } = { from: "00:00", to: "00:30" };
+  @state() private editingBlockIndex: number | null = null;
+  @state() private editBlockDraft: { from: string; to: string } = { from: "00:00", to: "00:30" };
 
   private nowTimer?: number;
   private todayWeekday: Weekday = JS_DAY_TO_WEEKDAY[new Date().getDay()];
@@ -63,7 +65,7 @@ export class ScheduleEditorCard extends LitElement {
         ? all.filter((s) => wanted.includes(`schedule.${s.id}`))
         : all;
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.error = errorMessage(e);
     } finally {
       this.loading = false;
     }
@@ -84,7 +86,7 @@ export class ScheduleEditorCard extends LitElement {
       const created = await createSchedule(this.hass, name, "mdi:calendar-clock", emptyDays());
       this.schedules = [...this.schedules, created];
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.error = errorMessage(e);
     }
   }
 
@@ -95,7 +97,7 @@ export class ScheduleEditorCard extends LitElement {
       const created = await createSchedule(this.hass, name, record.icon, daysOf(record));
       this.schedules = [...this.schedules, created];
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.error = errorMessage(e);
     }
   }
 
@@ -105,7 +107,7 @@ export class ScheduleEditorCard extends LitElement {
       await deleteSchedule(this.hass, record.id);
       this.schedules = this.schedules.filter((s) => s.id !== record.id);
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.error = errorMessage(e);
     }
   }
 
@@ -116,17 +118,45 @@ export class ScheduleEditorCard extends LitElement {
       const updated = await updateSchedule(this.hass, record.id, record.name, record.icon, days);
       this.schedules = this.schedules.map((s) => (s.id === record.id ? updated : s));
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      this.error = errorMessage(e);
     }
   }
 
   private toggleEditor(scheduleId: string, day: Weekday): void {
+    this.editingBlockIndex = null;
     if (this.openEditor && this.openEditor.scheduleId === scheduleId && this.openEditor.day === day) {
       this.openEditor = null;
     } else {
       this.openEditor = { scheduleId, day };
       this.newBlockDraft = { from: "00:00", to: "00:30" };
     }
+  }
+
+  private handleStartEditBlock(index: number, block: ScheduleBlock): void {
+    this.editingBlockIndex = index;
+    this.editBlockDraft = { from: block.from.slice(0, 5), to: block.to.slice(0, 5) };
+  }
+
+  private handleCancelEditBlock(): void {
+    this.editingBlockIndex = null;
+  }
+
+  private async handleSaveEditBlock(record: ScheduleRecord, day: Weekday, index: number): Promise<void> {
+    const from = `${this.editBlockDraft.from}:00`;
+    const to = `${this.editBlockDraft.to}:00`;
+    if (toMinutes(from) >= toMinutes(to)) {
+      this.error = "Start time must be before end time.";
+      return;
+    }
+    const existing = daysOf(record)[day];
+    const candidate = existing.map((b, i) => (i === index ? { from, to } : b));
+    if (hasOverlap(candidate)) {
+      this.error = "That block overlaps an existing one on this day.";
+      return;
+    }
+    this.error = null;
+    this.editingBlockIndex = null;
+    await this.persistDays(record, day, candidate);
   }
 
   private async handleAddBlock(record: ScheduleRecord, day: Weekday): Promise<void> {
@@ -225,13 +255,34 @@ export class ScheduleEditorCard extends LitElement {
       <div class="day-editor" @click=${(e: Event) => e.stopPropagation()}>
         ${blocks.length === 0
           ? html`<div class="muted">No blocks on ${DAY_LABEL[day]}.</div>`
-          : blocks.map(
-              (b, i) => html`
-                <div class="block-chip">
-                  <span>${b.from.slice(0, 5)}–${b.to.slice(0, 5)}</span>
-                  <button @click=${() => this.handleRemoveBlock(record, day, i)}>×</button>
-                </div>
-              `
+          : blocks.map((b, i) =>
+              this.editingBlockIndex === i
+                ? html`
+                    <div class="block-chip editing">
+                      <input
+                        type="time"
+                        .value=${this.editBlockDraft.from}
+                        @change=${(e: Event) =>
+                          (this.editBlockDraft = { ...this.editBlockDraft, from: (e.target as HTMLInputElement).value })}
+                      />
+                      <span>–</span>
+                      <input
+                        type="time"
+                        .value=${this.editBlockDraft.to}
+                        @change=${(e: Event) =>
+                          (this.editBlockDraft = { ...this.editBlockDraft, to: (e.target as HTMLInputElement).value })}
+                      />
+                      <button title="Save" @click=${() => this.handleSaveEditBlock(record, day, i)}>✓</button>
+                      <button title="Cancel" @click=${() => this.handleCancelEditBlock()}>×</button>
+                    </div>
+                  `
+                : html`
+                    <div class="block-chip">
+                      <span>${b.from.slice(0, 5)}–${b.to.slice(0, 5)}</span>
+                      <button title="Edit" @click=${() => this.handleStartEditBlock(i, b)}>✎</button>
+                      <button title="Delete" @click=${() => this.handleRemoveBlock(record, day, i)}>×</button>
+                    </div>
+                  `
             )}
         <div class="add-block">
           <input
@@ -371,6 +422,13 @@ export class ScheduleEditorCard extends LitElement {
       font-size: 1.1em;
       line-height: 1;
       color: var(--secondary-text-color);
+    }
+    .block-chip.editing {
+      padding: 2px 6px;
+      gap: 6px;
+    }
+    .block-chip.editing input[type="time"] {
+      font-size: 0.85em;
     }
     .add-block {
       display: flex;

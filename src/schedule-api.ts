@@ -1,5 +1,21 @@
 import { HomeAssistant, ScheduleDays, ScheduleRecord, WEEKDAYS } from "./types";
 
+/**
+ * HA's websocket connection (home-assistant-js-websocket) rejects
+ * sendMessagePromise with the raw `{code, message}` error object from the
+ * response, not an Error instance - so `e instanceof Error` is false and
+ * `String(e)` yields "[object Object]" for the exact errors this card most
+ * needs to surface (e.g. the native schedule domain's overlap rejection).
+ */
+export function errorMessage(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === "object" && e !== null && "message" in e) {
+    const m = (e as { message: unknown }).message;
+    if (typeof m === "string") return m;
+  }
+  return String(e);
+}
+
 export function emptyDays(): ScheduleDays {
   return {
     monday: [],
