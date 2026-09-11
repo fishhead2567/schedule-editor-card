@@ -223,6 +223,64 @@ Goal: prove the actual HACS distribution path works, not just CI.
       not required — click + time-inputs already works; also hold for UI
       feedback rather than building speculatively).
 
+### UI feedback round 1 (2026-09-11, real user review of the dev instance)
+
+**Feedback:** the card was too tall — every schedule always rendered its
+full 7-row weekly bar grid, most of which is empty gray bar for schedules
+active on only 1-2 days. Ask: default to just listing current blocks, put
+the visual weekly grid behind a down-arrow/expand toggle, and let clicking
+a block go straight to editing it (not click-the-day-row-first, then
+find-the-block).
+
+**Fixed** — real layout change (`schedule-editor-card.ts`), not just a
+tweak:
+- Default view per schedule is now a flat, wrapped list of block chips
+  (`Tue 00:20–00:40`, one chip per actual block across the whole week,
+  empty days simply don't appear) plus an inline "add block" row (day
+  dropdown + two time inputs) — no bars, no empty-day rows, by default.
+- A chevron in the schedule header (▸/▾) toggles the full 7-row weekly
+  timeline visual on/off, collapsed by default. It's now purely visual
+  (no per-day click-to-edit inside it anymore — that would be redundant
+  with the flat list, which is always visible above it).
+- Clicking a block chip's text directly enters inline edit for that
+  specific block (no intermediate day-click step). Verified live: clicked
+  a chip in the collapsed default view, changed its end time, saved,
+  confirmed the new value via `schedule/list` server-side.
+- Result: a 4-schedule card that previously rendered ~28 mostly-empty bar
+  rows now renders only as many chips as there are real blocks (8 for the
+  busiest fixture) — visibly, substantially shorter, confirmed by
+  screenshot.
+
+**Feedback:** "empty schedules are showing a yellow bar for Fridays" —
+reported as if it were a data bug (an empty schedule shouldn't show
+anything).
+
+**Diagnosis, not a bug:** that was the "now" indicator — it renders on
+today's row (the review happened on a Friday) even when the day has zero
+blocks, which is correct behavior (you should be able to see where "now"
+falls even on an empty day) but was genuinely easy to mistake for a
+scheduled block, since it used the same visual language (a colored bar
+filling part of the row).
+
+**Fixed:**
+- The now-indicator no longer looks like a block at all: it's now a thin
+  red line with a small triangle flag at the top — the same visual
+  convention as a video-editor playhead or Google Calendar's current-time
+  line — clearly a marker, not filled content. Blocks stay in
+  `--state-active-color` (blue by default); the marker uses
+  `--now-line-color` (falls back to `--error-color`, red) specifically so
+  the two are never the same hue.
+- It also no longer shows by default at all in the normal collapsed view,
+  since that view has no bars — it only appears if you deliberately expand
+  a schedule's weekly grid via the chevron, at which point the reviewer
+  has already opted into seeing the detailed timeline and the red
+  marker's meaning is unambiguous in that context.
+
+All of the above verified against the disposable dev instance
+(`localhost:8124`), screenshots taken in light/dark/mobile, real click
+interactions driven through the actual rendered shadow DOM (not just
+inspecting source) — same rigor as every other claim in this plan.
+
 ### Milestone 4 — Entity selection (confirmed in scope 2026-09-11, sequenced after Milestones 1-3)
 Goal: let one card row show/edit **one or more entities (including
 groups)** that turn on while the schedule is active and off otherwise —

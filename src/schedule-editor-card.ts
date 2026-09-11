@@ -1,4 +1,4 @@
-import { LitElement, html, css, PropertyValues, TemplateResult, nothing } from "lit";
+import { LitElement, html, css, TemplateResult, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { CardConfig, HomeAssistant, ScheduleBlock, ScheduleRecord, WEEKDAYS, Weekday } from "./types";
 import { createSchedule, daysOf, deleteSchedule, errorMessage, listSchedules, updateSchedule, emptyDays } from "./schedule-api";
@@ -17,6 +17,18 @@ const DAY_LABEL: Record<Weekday, string> = {
 // getDay() is 0=Sunday..6=Saturday; WEEKDAYS is Monday-first.
 const JS_DAY_TO_WEEKDAY: Weekday[] = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 
+interface NewBlockDraft {
+  day: Weekday;
+  from: string;
+  to: string;
+}
+
+interface FlatBlock {
+  day: Weekday;
+  index: number;
+  block: ScheduleBlock;
+}
+
 @customElement("schedule-editor-card")
 export class ScheduleEditorCard extends LitElement {
   @property({ attribute: false }) hass!: HomeAssistant;
@@ -24,10 +36,10 @@ export class ScheduleEditorCard extends LitElement {
   @state() private schedules: ScheduleRecord[] = [];
   @state() private loading = true;
   @state() private error: string | null = null;
-  @state() private openEditor: { scheduleId: string; day: Weekday } | null = null;
-  @state() private newBlockDraft: { from: string; to: string } = { from: "00:00", to: "00:30" };
-  @state() private editingBlockIndex: number | null = null;
+  @state() private expandedTimelines: Set<string> = new Set();
+  @state() private editingBlock: { scheduleId: string; day: Weekday; index: number } | null = null;
   @state() private editBlockDraft: { from: string; to: string } = { from: "00:00", to: "00:30" };
+  @state() private newBlockDrafts: Record<string, NewBlockDraft> = {};
 
   private nowTimer?: number;
   private todayWeekday: Weekday = JS_DAY_TO_WEEKDAY[new Date().getDay()];
@@ -37,7 +49,7 @@ export class ScheduleEditorCard extends LitElement {
   }
 
   getCardSize(): number {
-    return 2 + this.schedules.length * 3;
+    return 2 + this.schedules.length * 2;
   }
 
   connectedCallback(): void {
@@ -77,6 +89,33 @@ export class ScheduleEditorCard extends LitElement {
 
   private stateOf(scheduleId: string): string | undefined {
     return this.hass?.states?.[this.entityIdFor(scheduleId)]?.state;
+  }
+
+  private flatBlocks(record: ScheduleRecord): FlatBlock[] {
+    const days = daysOf(record);
+    const out: FlatBlock[] = [];
+    for (const day of WEEKDAYS) {
+      days[day].forEach((block, index) => out.push({ day, index, block }));
+    }
+    return out;
+  }
+
+  private draftFor(scheduleId: string): NewBlockDraft {
+    return this.newBlockDrafts[scheduleId] ?? { day: this.todayWeekday, from: "00:00", to: "00:30" };
+  }
+
+  private updateDraft(scheduleId: string, patch: Partial<NewBlockDraft>): void {
+    this.newBlockDrafts = {
+      ...this.newBlockDrafts,
+      [scheduleId]: { ...this.draftFor(scheduleId), ...patch },
+    };
+  }
+
+  private toggleTimeline(scheduleId: string): void {
+    const next = new Set(this.expandedTimelines);
+    if (next.has(scheduleId)) next.delete(scheduleId);
+    else next.add(scheduleId);
+    this.expandedTimelines = next;
   }
 
   private async handleAddSchedule(): Promise<void> {
@@ -122,26 +161,18 @@ export class ScheduleEditorCard extends LitElement {
     }
   }
 
-  private toggleEditor(scheduleId: string, day: Weekday): void {
-    this.editingBlockIndex = null;
-    if (this.openEditor && this.openEditor.scheduleId === scheduleId && this.openEditor.day === day) {
-      this.openEditor = null;
-    } else {
-      this.openEditor = { scheduleId, day };
-      this.newBlockDraft = { from: "00:00", to: "00:30" };
-    }
-  }
-
-  private handleStartEditBlock(index: number, block: ScheduleBlock): void {
-    this.editingBlockIndex = index;
+  private handleStartEditBlock(scheduleId: string, day: Weekday, index: number, block: ScheduleBlock): void {
+    this.editingBlock = { scheduleId, day, index };
     this.editBlockDraft = { from: block.from.slice(0, 5), to: block.to.slice(0, 5) };
   }
 
   private handleCancelEditBlock(): void {
-    this.editingBlockIndex = null;
+    this.editingBlock = null;
   }
 
-  private async handleSaveEditBlock(record: ScheduleRecord, day: Weekday, index: number): Promise<void> {
+  private async handleSaveEditBlock(record: ScheduleRecord): Promise<void> {
+    if (!this.editingBlock || this.editingBlock.scheduleId !== record.id) return;
+    const { day, index } = this.editingBlock;
     const from = `${this.editBlockDraft.from}:00`;
     const to = `${this.editBlockDraft.to}:00`;
     if (toMinutes(from) >= toMinutes(to)) {
@@ -155,25 +186,27 @@ export class ScheduleEditorCard extends LitElement {
       return;
     }
     this.error = null;
-    this.editingBlockIndex = null;
+    this.editingBlock = null;
     await this.persistDays(record, day, candidate);
   }
 
-  private async handleAddBlock(record: ScheduleRecord, day: Weekday): Promise<void> {
-    const from = `${this.newBlockDraft.from}:00`;
-    const to = `${this.newBlockDraft.to}:00`;
+  private async handleAddBlock(record: ScheduleRecord): Promise<void> {
+    const draft = this.draftFor(record.id);
+    const from = `${draft.from}:00`;
+    const to = `${draft.to}:00`;
     if (toMinutes(from) >= toMinutes(to)) {
       this.error = "Start time must be before end time.";
       return;
     }
-    const existing = daysOf(record)[day];
+    const existing = daysOf(record)[draft.day];
     const candidate = [...existing, { from, to }];
     if (hasOverlap(candidate)) {
-      this.error = "That block overlaps an existing one on this day.";
+      this.error = "That block overlaps an existing one on that day.";
       return;
     }
     this.error = null;
-    await this.persistDays(record, day, candidate);
+    this.updateDraft(record.id, { from: "00:00", to: "00:30" });
+    await this.persistDays(record, draft.day, candidate);
   }
 
   private async handleRemoveBlock(record: ScheduleRecord, day: Weekday, index: number): Promise<void> {
@@ -202,9 +235,17 @@ export class ScheduleEditorCard extends LitElement {
 
   private renderSchedule(record: ScheduleRecord): TemplateResult {
     const isOn = this.stateOf(record.id) === "on";
+    const expanded = this.expandedTimelines.has(record.id);
+    const blocks = this.flatBlocks(record);
     return html`
       <div class="schedule">
         <div class="schedule-header">
+          <ha-icon-button
+            title=${expanded ? "Hide weekly view" : "Show weekly view"}
+            @click=${() => this.toggleTimeline(record.id)}
+          >
+            <ha-icon icon=${expanded ? "mdi:chevron-down" : "mdi:chevron-right"}></ha-icon>
+          </ha-icon-button>
           <ha-icon icon=${record.icon || "mdi:calendar-clock"}></ha-icon>
           <span class="name">${record.name}</span>
           <span class="pill ${isOn ? "on" : "off"}">${isOn ? "Active now" : "Idle"}</span>
@@ -216,22 +257,99 @@ export class ScheduleEditorCard extends LitElement {
             <ha-icon icon="mdi:delete"></ha-icon>
           </ha-icon-button>
         </div>
-        <div class="days">
-          ${WEEKDAYS.map((day) => this.renderDayRow(record, day))}
+
+        <div class="block-list">
+          ${blocks.length === 0
+            ? html`<div class="muted">No blocks yet.</div>`
+            : blocks.map((fb) => this.renderBlockChip(record, fb))}
+          ${this.renderAddBlockForm(record)}
         </div>
+
+        ${expanded
+          ? html`<div class="days">${WEEKDAYS.map((day) => this.renderDayRow(record, day))}</div>`
+          : nothing}
+      </div>
+    `;
+  }
+
+  private renderBlockChip(record: ScheduleRecord, fb: FlatBlock): TemplateResult {
+    const { day, index, block } = fb;
+    const isEditing =
+      this.editingBlock?.scheduleId === record.id &&
+      this.editingBlock?.day === day &&
+      this.editingBlock?.index === index;
+
+    if (isEditing) {
+      return html`
+        <div class="block-chip editing">
+          <span class="chip-day">${DAY_LABEL[day]}</span>
+          <input
+            type="time"
+            .value=${this.editBlockDraft.from}
+            @change=${(e: Event) =>
+              (this.editBlockDraft = { ...this.editBlockDraft, from: (e.target as HTMLInputElement).value })}
+          />
+          <span>–</span>
+          <input
+            type="time"
+            .value=${this.editBlockDraft.to}
+            @change=${(e: Event) =>
+              (this.editBlockDraft = { ...this.editBlockDraft, to: (e.target as HTMLInputElement).value })}
+          />
+          <button title="Save" @click=${() => this.handleSaveEditBlock(record)}>✓</button>
+          <button title="Cancel" @click=${() => this.handleCancelEditBlock()}>×</button>
+        </div>
+      `;
+    }
+
+    return html`
+      <div class="block-chip">
+        <button
+          class="chip-text"
+          title="Click to edit"
+          @click=${() => this.handleStartEditBlock(record.id, day, index, block)}
+        >
+          <span class="chip-day">${DAY_LABEL[day]}</span>
+          ${block.from.slice(0, 5)}–${block.to.slice(0, 5)}
+        </button>
+        <button title="Delete" @click=${() => this.handleRemoveBlock(record, day, index)}>×</button>
+      </div>
+    `;
+  }
+
+  private renderAddBlockForm(record: ScheduleRecord): TemplateResult {
+    const draft = this.draftFor(record.id);
+    return html`
+      <div class="add-block">
+        <select
+          .value=${draft.day}
+          @change=${(e: Event) => this.updateDraft(record.id, { day: (e.target as HTMLSelectElement).value as Weekday })}
+        >
+          ${WEEKDAYS.map((d) => html`<option value=${d} ?selected=${d === draft.day}>${DAY_LABEL[d]}</option>`)}
+        </select>
+        <input
+          type="time"
+          .value=${draft.from}
+          @change=${(e: Event) => this.updateDraft(record.id, { from: (e.target as HTMLInputElement).value })}
+        />
+        <span>to</span>
+        <input
+          type="time"
+          .value=${draft.to}
+          @change=${(e: Event) => this.updateDraft(record.id, { to: (e.target as HTMLInputElement).value })}
+        />
+        <mwc-button @click=${() => this.handleAddBlock(record)}>+ Add</mwc-button>
       </div>
     `;
   }
 
   private renderDayRow(record: ScheduleRecord, day: Weekday): TemplateResult {
     const blocks = daysOf(record)[day];
-    const isEditing =
-      this.openEditor?.scheduleId === record.id && this.openEditor?.day === day;
     const isToday = day === this.todayWeekday;
     const nowPct = (currentMinutesOfDay() / 1440) * 100;
 
     return html`
-      <div class="day-row" @click=${() => this.toggleEditor(record.id, day)}>
+      <div class="day-row">
         <div class="day-label">${DAY_LABEL[day]}</div>
         <div class="timeline">
           ${blocks.map(
@@ -243,69 +361,15 @@ export class ScheduleEditorCard extends LitElement {
               ></div>
             `
           )}
-          ${isToday ? html`<div class="now-line" style="left:${nowPct}%"></div>` : nothing}
-        </div>
-      </div>
-      ${isEditing ? this.renderDayEditor(record, day, blocks) : nothing}
-    `;
-  }
-
-  private renderDayEditor(record: ScheduleRecord, day: Weekday, blocks: ScheduleBlock[]): TemplateResult {
-    return html`
-      <div class="day-editor" @click=${(e: Event) => e.stopPropagation()}>
-        ${blocks.length === 0
-          ? html`<div class="muted">No blocks on ${DAY_LABEL[day]}.</div>`
-          : blocks.map((b, i) =>
-              this.editingBlockIndex === i
-                ? html`
-                    <div class="block-chip editing">
-                      <input
-                        type="time"
-                        .value=${this.editBlockDraft.from}
-                        @change=${(e: Event) =>
-                          (this.editBlockDraft = { ...this.editBlockDraft, from: (e.target as HTMLInputElement).value })}
-                      />
-                      <span>–</span>
-                      <input
-                        type="time"
-                        .value=${this.editBlockDraft.to}
-                        @change=${(e: Event) =>
-                          (this.editBlockDraft = { ...this.editBlockDraft, to: (e.target as HTMLInputElement).value })}
-                      />
-                      <button title="Save" @click=${() => this.handleSaveEditBlock(record, day, i)}>✓</button>
-                      <button title="Cancel" @click=${() => this.handleCancelEditBlock()}>×</button>
-                    </div>
-                  `
-                : html`
-                    <div class="block-chip">
-                      <span>${b.from.slice(0, 5)}–${b.to.slice(0, 5)}</span>
-                      <button title="Edit" @click=${() => this.handleStartEditBlock(i, b)}>✎</button>
-                      <button title="Delete" @click=${() => this.handleRemoveBlock(record, day, i)}>×</button>
-                    </div>
-                  `
-            )}
-        <div class="add-block">
-          <input
-            type="time"
-            .value=${this.newBlockDraft.from}
-            @change=${(e: Event) =>
-              (this.newBlockDraft = { ...this.newBlockDraft, from: (e.target as HTMLInputElement).value })}
-          />
-          <span>to</span>
-          <input
-            type="time"
-            .value=${this.newBlockDraft.to}
-            @change=${(e: Event) =>
-              (this.newBlockDraft = { ...this.newBlockDraft, to: (e.target as HTMLInputElement).value })}
-          />
-          <mwc-button @click=${() => this.handleAddBlock(record, day)}>Add</mwc-button>
+          ${isToday
+            ? html`
+                <div class="now-marker" style="left:${nowPct}%" title="Now"></div>
+                <div class="now-line" style="left:${nowPct}%"></div>
+              `
+            : nothing}
         </div>
       </div>
     `;
-  }
-
-  protected updated(changed: PropertyValues): void {
-    super.updated(changed);
   }
 
   static styles = css`
@@ -337,7 +401,7 @@ export class ScheduleEditorCard extends LitElement {
     .schedule-header {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 4px;
       padding: 4px 0 8px;
     }
     .name {
@@ -356,51 +420,12 @@ export class ScheduleEditorCard extends LitElement {
     .spacer {
       flex: 1;
     }
-    .days {
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-    }
-    .day-row {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      cursor: pointer;
-      padding: 2px 0;
-    }
-    .day-label {
-      width: 32px;
-      font-size: 0.8em;
-      color: var(--secondary-text-color);
-    }
-    .timeline {
-      position: relative;
-      flex: 1;
-      height: 16px;
-      background: var(--divider-color);
-      border-radius: 3px;
-      overflow: hidden;
-    }
-    .block {
-      position: absolute;
-      top: 0;
-      bottom: 0;
-      background: var(--state-active-color, #2196f3);
-    }
-    .now-line {
-      position: absolute;
-      top: -2px;
-      bottom: -2px;
-      width: 2px;
-      background: var(--warning-color, #ffca28);
-    }
-    .day-editor {
+    .block-list {
       display: flex;
       flex-wrap: wrap;
       align-items: center;
       gap: 6px;
-      padding: 6px 0 6px 40px;
-      cursor: default;
+      padding-left: 40px;
     }
     .muted {
       color: var(--secondary-text-color);
@@ -412,8 +437,21 @@ export class ScheduleEditorCard extends LitElement {
       gap: 4px;
       background: var(--secondary-background-color);
       border-radius: 12px;
-      padding: 2px 4px 2px 10px;
+      padding: 2px 4px 2px 4px;
       font-size: 0.85em;
+    }
+    .chip-day {
+      font-weight: 500;
+      color: var(--secondary-text-color);
+      margin-right: 4px;
+    }
+    .chip-text {
+      border: none;
+      background: none;
+      cursor: pointer;
+      font: inherit;
+      color: inherit;
+      padding: 2px 4px;
     }
     .block-chip button {
       border: none;
@@ -434,6 +472,66 @@ export class ScheduleEditorCard extends LitElement {
       display: flex;
       align-items: center;
       gap: 4px;
+      font-size: 0.85em;
+    }
+    .days {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      padding-left: 40px;
+      margin-top: 10px;
+    }
+    .day-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 2px 0;
+    }
+    .day-label {
+      width: 32px;
+      font-size: 0.8em;
+      color: var(--secondary-text-color);
+    }
+    .timeline {
+      position: relative;
+      flex: 1;
+      height: 16px;
+      background: var(--divider-color);
+      border-radius: 3px;
+      overflow: visible;
+    }
+    .block {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      background: var(--state-active-color, #2196f3);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    /*
+     * The "now" indicator deliberately does NOT look like a block (which is
+     * a filled rectangle in --state-active-color): it's a thin red line with
+     * a small triangle flag, the same visual language as a video-editor
+     * playhead / Google Calendar's current-time line, so it can't be
+     * mistaken for scheduled content even on an empty day.
+     */
+    .now-line {
+      position: absolute;
+      top: -2px;
+      bottom: -2px;
+      width: 1.5px;
+      background: var(--now-line-color, var(--error-color, #ff5252));
+      pointer-events: none;
+    }
+    .now-marker {
+      position: absolute;
+      top: -7px;
+      width: 0;
+      height: 0;
+      border-left: 4px solid transparent;
+      border-right: 4px solid transparent;
+      border-top: 5px solid var(--now-line-color, var(--error-color, #ff5252));
+      transform: translateX(-4px);
     }
   `;
 }
