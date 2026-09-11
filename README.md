@@ -4,6 +4,8 @@ A Lovelace card for Home Assistant's **native `schedule` helper domain** — cre
 edit, duplicate and delete weekly schedules directly from your dashboard, with
 day-by-day timeline bars and a live "now" indicator.
 
+![Schedule Editor Card showing four schedules with weekly timeline bars and a live now-indicator](docs/screenshot.png)
+
 Home Assistant's built-in Schedule helper computes its on/off state live from
 the clock (not from a one-time trigger), which makes it a good fit for
 anything actuating real equipment — it doesn't get stuck in the wrong state
