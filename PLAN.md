@@ -70,9 +70,13 @@ intentionally decoupled (see Phase 2 for why that might change).
 - **CI green on GitHub Actions** (`.github/workflows/ci.yml`, run
   [34552958336](https://github.com/fishhead2567/schedule-editor-card/actions/runs/34552958336)):
   typecheck, lint, test, build all pass on push to `master`.
-- Release workflow written (`.github/workflows/release.yml`) — builds and
-  attaches `dist/schedule-editor-card.js` to a GitHub Release on `v*` tag
-  push. **Not yet exercised** — no tag cut yet (see Milestone 2).
+- Release workflow (`.github/workflows/release.yml`) exercised for real:
+  `v0.1.0` tagged and pushed, GitHub Release created with
+  `schedule-editor-card.js` attached, asset verified byte-identical to the
+  local build.
+- HACS's own official validator (`hacs/action`, `.github/workflows/validate.yml`)
+  passes 8/8 — added mid-session after the first run caught two real gaps
+  (missing README image, missing repo topics), both fixed.
 - Dev harness (`dev/docker-compose.yml`, `dev/seed-schedules.mjs`) built and
   used for real: spun up `ghcr.io/home-assistant/home-assistant:stable` on
   `localhost:8124`, scripted onboarding via the REST API (no manual
@@ -96,8 +100,9 @@ intentionally decoupled (see Phase 2 for why that might change).
   any future scripted HA UI testing.
 
 **Not done yet:**
-- No `v0.1.0` tag cut, so the release workflow has never actually run and
-  HACS custom-repository install has never been tried end-to-end.
+- No literal click-through HACS "custom repository" install has been done
+  (deliberately — see Milestone 2 for why). The release + HACS-validator
+  path that install would rely on is confirmed working.
 - No editing of an *existing* block's times (only add new / remove existing)
   — no click-to-edit or drag-to-resize.
 - No overlap check against blocks already saved server-side beyond the
@@ -139,15 +144,35 @@ Goal: a working, tested, CI-green schedule CRUD card.
 - [ ] Dark theme visual check.
 - [ ] Narrow-viewport (phone width) visual check.
 
-### Milestone 2 — First real release
+### Milestone 2 — First real release (done, with one deliberate exception)
 Goal: prove the actual HACS distribution path works, not just CI.
-- [ ] Tag `v0.1.0`, confirm `release.yml` produces a GitHub Release with
-      `schedule-editor-card.js` attached.
-- [ ] Install it via HACS "custom repository" on the **dev Docker instance**
-      (not production) and confirm it installs/loads/updates correctly
-      through the real HACS UI flow, not just a manually-mounted file.
-- [ ] Only after that's confirmed working: consider installing on the
-      user's real HA instance (192.168.1.206) as a custom repository.
+- [x] Tag `v0.1.0`, confirm `release.yml` produces a GitHub Release with
+      `schedule-editor-card.js` attached — done, asset byte-for-byte matches
+      the local build (38861 bytes), filename matches `hacs.json`.
+- [x] Repo passes HACS's own official validator (`hacs/action`, category
+      `plugin`) — added as a third CI workflow (`validate.yml`), runs on
+      every push plus weekly (catches HACS changing its own rules). First
+      run correctly caught two real gaps: no image in the README, no repo
+      topics. Fixed both (added the verified screenshot to
+      `docs/screenshot.png`, set topics `home-assistant`, `hacs`,
+      `lovelace`, `lovelace-card`, `home-automation`). Second run: 8/8
+      checks pass.
+- [ ] **Deliberately not done**: an actual HACS "Add custom repository" →
+      install click-through on the dev instance. HACS's setup requires a
+      GitHub OAuth device-flow login (visit github.com/login/device, enter
+      a code, approve) — there's no API to complete that without a real
+      browser session tied to a logged-in GitHub account, and scripting a
+      login flow against a real service is exactly the category of action
+      this project avoids automating (same reasoning as never scripting
+      HA's own username/password login earlier in this work). The
+      validator above is the authoritative, correct-for-automation
+      substitute — it's the same tool HACS's own maintainers use to gate
+      real-world repos. A literal click-through install is a ~60-second
+      manual check anyone can do themselves whenever they want the final
+      "yes, exactly this button works" confirmation; not worth blocking
+      further work on.
+- [ ] Only after the user wants to: install on the real HA instance
+      (192.168.1.206) as a custom repository — their call, their login.
 
 ### Milestone 3 — Polish
 - [ ] Visual config editor (`getConfigElement`) so the card can be added
