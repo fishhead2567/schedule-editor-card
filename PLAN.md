@@ -40,10 +40,13 @@ irrigation control, 2026-09-10/11):
 So: this card exists to be the missing GUI for the *correct, restart-safe*
 scheduling primitive, not to replace it with something flashier but weaker.
 
-**Non-goal**: this card does not know about switches, lights, or conditions.
-A `schedule` entity is just a weekly on/off signal. Wiring that signal to an
-actual device is the separate blueprint-automation concern described above —
-intentionally decoupled (see Phase 2 for why that might change).
+**Updated 2026-09-11**: entity selection is no longer a non-goal — it's
+Milestone 4 (was "Phase 2"), now firmly in scope, just sequenced after the
+plain schedule editor is solid. See Milestone 4 for the design and the
+architecture tradeoff it accepts (this will create real `automation.*`
+entities under the hood — there's no way around that within HA's execution
+model without a much bigger, separate custom-integration project; see that
+section for the full reasoning).
 
 ## Architecture decisions (and why)
 
@@ -126,7 +129,8 @@ intentionally decoupled (see Phase 2 for why that might change).
   `~/best_data/projects/ha-schedule-editor-card/dev/config/` — gitignored,
   fine to delete any time with `docker compose -f dev/docker-compose.yml
   down -v`.
-- Phase 2 (see below) not started at all.
+- Milestone 4 (entity selection — on/off entity lists per schedule) not
+  started; design finalized 2026-09-11, see that section.
 
 ## Milestones
 
@@ -182,21 +186,73 @@ Goal: prove the actual HACS distribution path works, not just CI.
 - [ ] Consider drag-to-create/resize on the timeline bars (nice-to-have,
       not required — click + time-inputs already works).
 
-### Milestone 4 — Phase 2 (optional, do not start before Milestones 1-3 are settled and the user has actually lived with the plain schedule editor for a while)
-Goal: let one card row also show/edit the *paired* automation (target
-entity + condition), closing the loop back to the user's original mockup
-(group + duration + start time + day pills, one card).
-- Needs a linking convention between a `schedule.*` entity and the
-  blueprint-automation instance that syncs it to a target (e.g. naming
-  convention, or an automation search by `use_blueprint.path` +
-  `input.schedule_entity` match).
-- Reads/writes the automation's `use_blueprint.input` via
-  `/api/config/automation/config/{id}` (already proven to work, from the
-  original HA-instance session).
-- Needs a "create schedule + create bound automation" combined flow.
-- **Explicitly deferred** — adds real cross-domain complexity; only worth
-  it if Milestone 1-3's plain schedule editor isn't sufficient on its own
-  after real use.
+### Milestone 4 — Entity selection (confirmed in scope 2026-09-11, sequenced after Milestones 1-3)
+Goal: let one card row show/edit **which entities turn on and which turn
+off while the schedule is active** — closing the loop back to the user's
+original mockup (group + duration + start time + day pills, one card), and
+directly answering the requirement: *"it needs to let me choose the
+entities I want on during the schedule and off."*
+
+**Design — two entity sets per schedule, not one mirrored target:**
+The existing blueprint (`local/schedule_sync.yaml`, built on the real HA
+instance before this card existed) only supports a single target that
+mirrors the schedule's own polarity (on when schedule on, off when schedule
+off). That's too narrow for "choose entities I want on during the schedule
+**and** [entities I want] off [during the schedule]" — the real requirement
+is two independent lists:
+- `on_entities` — turned on while the schedule is active, off otherwise.
+- `off_entities` — turned off while the schedule is active, on otherwise
+  (e.g. "don't run the well pump while the valve's open").
+Both need the same restart-safe reconciliation property already proven for
+the single-target case (trigger on schedule state change AND
+`homeassistant, event: start`) — that part of the design carries over
+unchanged, just applied per-entity-per-list instead of to one target.
+
+**Architecture tradeoff, decided:** this still goes through the blueprint
+→ `automation.*` entity mechanism (see the "Why this exists" section above
+for the full reasoning on why that's unavoidable within HA's execution
+model). The card manages that automation's entire lifecycle via the config
+API — the user never hand-edits YAML or opens Settings → Automations for
+this — but a real automation entity will exist and be visible there if
+they go looking. **A from-scratch custom-integration approach (no
+`automation` domain involvement at all) is a legitimate alternative that
+would hide this completely, but it's a materially bigger, different
+project** (a real Python backend, its own storage, its own restart-safe
+reconciliation logic re-implemented outside HA's automation engine) — not
+something to fold into "extend the card." Explicitly not doing this now;
+revisit only if the automation-list visibility genuinely becomes a problem
+after living with the blueprint approach.
+
+**Concrete tasks:**
+- [ ] Extend `local/schedule_sync.yaml` blueprint: replace single
+      `target_entity` input with `on_entities` (list) and `off_entities`
+      (list), both entity selectors (domain: switch, light — group helpers
+      already work here since they present as normal switch/light
+      entities). Re-verify restart-safety for the two-list case the same
+      way the single-target case was proven (force a mismatched state,
+      confirm the automation corrects it, for both an `on_entities` member
+      and an `off_entities` member) — don't assume the proof carries over
+      untested just because the logic looks similar.
+- [ ] Linking convention between a `schedule.*` entity and its bound
+      automation — simplest option: deterministic automation id derived
+      from the schedule id (e.g. `schedule_sync_<schedule_id>`), looked up
+      directly rather than searched for.
+- [ ] Card UI: per-schedule, an entity-list editor for "on while active"
+      and "off while active" (two multi-select entity pickers, likely
+      reusing HA's own `<ha-entity-picker>` element rather than
+      hand-rolling one — check whether that element is safely usable from
+      a custom card's shadow DOM before committing to it).
+- [ ] Combined create flow: creating a new schedule from the card should
+      offer to set up its automation binding in the same step, not as a
+      separate manual task.
+- [ ] Combined delete flow: deleting a schedule should prompt to also
+      delete its bound automation (orphaned automations pointing at a
+      deleted schedule entity would silently do nothing, which is a worse
+      failure mode than asking).
+- [ ] Update `README.md`'s "Pairing with an automation" section — it
+      currently documents this as something the user sets up separately;
+      once Milestone 4 lands, the card does it, so the docs need to change
+      from "here's the pattern" to "the card does this for you."
 
 ## Testing strategy
 
