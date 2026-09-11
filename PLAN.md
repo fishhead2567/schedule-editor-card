@@ -4,6 +4,19 @@ Living planning document. Update this when scope, status, or decisions change �
 don't let it drift out of sync with reality. Repo:
 https://github.com/fishhead2567/schedule-editor-card
 
+**Operational boundary set 2026-09-11: no further changes to the user's
+real Home Assistant instance (192.168.1.206) from this project for the
+remainder of this working session.** The Milestone 4 backend changes
+(blueprint update) already made there are real and stay in place — this
+isn't a rollback, it's a stop-touching-it-further instruction. The user
+will start a dedicated session later specifically to integrate this
+project's output onto real HA when they're ready for that. Until then,
+**all work happens against the disposable Docker dev instance only**
+(`dev/docker-compose.yml`, `localhost:8124`) or in the repo itself. If a
+future session needs to touch the real instance again, that has to come
+from the user, explicitly, in that dedicated session — not assumed from
+this plan.
+
 ## Why this exists
 
 Context from the conversation that started this project (Home Assistant
