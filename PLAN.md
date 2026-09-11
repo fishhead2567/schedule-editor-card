@@ -187,66 +187,83 @@ Goal: prove the actual HACS distribution path works, not just CI.
       not required — click + time-inputs already works).
 
 ### Milestone 4 — Entity selection (confirmed in scope 2026-09-11, sequenced after Milestones 1-3)
-Goal: let one card row show/edit **which entities turn on and which turn
-off while the schedule is active** — closing the loop back to the user's
-original mockup (group + duration + start time + day pills, one card), and
-directly answering the requirement: *"it needs to let me choose the
-entities I want on during the schedule and off."*
+Goal: let one card row show/edit **one or more entities (including
+groups)** that turn on while the schedule is active and off otherwise —
+closing the loop back to the user's original mockup (group + duration +
+start time + day pills, one card).
 
-**Design — two entity sets per schedule, not one mirrored target:**
-The existing blueprint (`local/schedule_sync.yaml`, built on the real HA
-instance before this card existed) only supports a single target that
-mirrors the schedule's own polarity (on when schedule on, off when schedule
-off). That's too narrow for "choose entities I want on during the schedule
-**and** [entities I want] off [during the schedule]" — the real requirement
-is two independent lists:
-- `on_entities` — turned on while the schedule is active, off otherwise.
-- `off_entities` — turned off while the schedule is active, on otherwise
-  (e.g. "don't run the well pump while the valve's open").
-Both need the same restart-safe reconciliation property already proven for
-the single-target case (trigger on schedule state change AND
-`homeassistant, event: start`) — that part of the design carries over
-unchanged, just applied per-entity-per-list instead of to one target.
+**Design — one entity list, not two (corrected 2026-09-11):** an earlier
+pass of this section proposed separate `on_entities`/`off_entities` lists.
+The user clarified that's not needed — one list is enough, with the fixed
+rule "on while active, off otherwise." Simpler, matches the original
+blueprint's polarity exactly, just generalized from a single entity to a
+list (and confirmed groups work here for free, since a group helper is
+just a normal `light.*`/`switch.*` entity).
 
-**Architecture tradeoff, decided:** this still goes through the blueprint
-→ `automation.*` entity mechanism (see the "Why this exists" section above
-for the full reasoning on why that's unavoidable within HA's execution
-model). The card manages that automation's entire lifecycle via the config
-API — the user never hand-edits YAML or opens Settings → Automations for
-this — but a real automation entity will exist and be visible there if
-they go looking. **A from-scratch custom-integration approach (no
-`automation` domain involvement at all) is a legitimate alternative that
-would hide this completely, but it's a materially bigger, different
-project** (a real Python backend, its own storage, its own restart-safe
-reconciliation logic re-implemented outside HA's automation engine) — not
-something to fold into "extend the card." Explicitly not doing this now;
-revisit only if the automation-list visibility genuinely becomes a problem
-after living with the blueprint approach.
+**Second design question raised, and resolved — staying in sync between
+transitions:** our restart-safety proof only covers two moments: the
+schedule's on/off state *changing*, and Home Assistant *starting up*.
+Between those moments — someone manually flips an entity, another
+automation touches it, a device glitches — nothing corrects it; the
+current design is edge-triggered, not continuously enforcing. Whether
+that's acceptable depends on the entity: for lights, letting a manual
+override persist until the next scheduled transition is often the
+*desired* behavior (an automation that instantly fights a manual toggle is
+annoying); for an irrigation valve, drift being silently uncorrected for
+hours is a real safety concern.
+
+Resolution: add an optional **periodic recheck** to the blueprint — a
+`time_pattern` trigger (e.g. every N minutes) that re-asserts "what should
+this be right now" on a cadence, in addition to the existing
+transition/startup triggers. This is a normal, idiomatic HA pattern (not a
+hack, not "an automation that fires perpetually" in any unusual sense —
+`time_pattern` is a first-class trigger type built for exactly this), and
+it stays inside the automation engine rather than requiring the
+bigger custom-integration fork. Make the interval **configurable per
+schedule** (including "off," today's transition-only behavior, as the
+default) so tight enforcement can be chosen for a valve and looser
+behavior kept for lights — one setting does not fit every entity.
+
+A truly continuous, always-enforcing control loop *outside* the automation
+engine entirely remains the same bigger fork already noted below (a real
+Python backend with its own reconciliation logic) — the periodic trigger
+gets most of the practical benefit without that jump in scope, and is the
+right default answer unless real use proves it insufficient.
+
+**Architecture tradeoff, unchanged:** this still goes through the
+blueprint → `automation.*` entity mechanism (see the "Why this exists"
+section above for the full reasoning on why that's unavoidable within HA's
+execution model short of a from-scratch custom integration). The card
+manages that automation's entire lifecycle via the config API — the user
+never hand-edits YAML or opens Settings → Automations for this — but a
+real automation entity will exist and be visible there if they go looking.
 
 **Concrete tasks:**
-- [ ] Extend `local/schedule_sync.yaml` blueprint: replace single
-      `target_entity` input with `on_entities` (list) and `off_entities`
-      (list), both entity selectors (domain: switch, light — group helpers
-      already work here since they present as normal switch/light
-      entities). Re-verify restart-safety for the two-list case the same
-      way the single-target case was proven (force a mismatched state,
-      confirm the automation corrects it, for both an `on_entities` member
-      and an `off_entities` member) — don't assume the proof carries over
-      untested just because the logic looks similar.
+- [ ] Extend `local/schedule_sync.yaml` blueprint: `target_entity` (single)
+      → `target_entities` (list, entity selector, domain: switch/light,
+      `multiple: true`). Same on-while-active/off-otherwise polarity as
+      today, just applied to each entity in the list.
+- [ ] Add the optional periodic-recheck `time_pattern` trigger, interval as
+      a blueprint input (minutes; a sentinel like 0 or omitted = disabled).
+      Re-verify restart-safety AND the new recheck behavior empirically
+      (force a mismatched state mid-window with recheck enabled, confirm
+      it self-corrects within roughly the configured interval) — don't
+      assume it works from the trigger existing; prove it the same way the
+      original restart-safety claim was proven.
 - [ ] Linking convention between a `schedule.*` entity and its bound
       automation — simplest option: deterministic automation id derived
       from the schedule id (e.g. `schedule_sync_<schedule_id>`), looked up
       directly rather than searched for.
-- [ ] Card UI: per-schedule, an entity-list editor for "on while active"
-      and "off while active" (two multi-select entity pickers, likely
-      reusing HA's own `<ha-entity-picker>` element rather than
-      hand-rolling one — check whether that element is safely usable from
-      a custom card's shadow DOM before committing to it).
+- [ ] Card UI: per-schedule, a multi-select entity picker (include groups)
+      plus the recheck-interval control. Likely reuse HA's own
+      `<ha-entity-picker>` element rather than hand-rolling one — check
+      whether that element is safely usable from a custom card's shadow
+      DOM before committing to it.
 - [ ] Combined create flow: creating a new schedule from the card should
-      offer to set up its automation binding in the same step, not as a
-      separate manual task.
+      offer to set up its automation binding (entities + recheck interval)
+      in the same step, not as a separate manual task.
 - [ ] Combined delete flow: deleting a schedule should prompt to also
-      delete its bound automation (orphaned automations pointing at a
+      delete its bound automation (an orphaned automation pointing at a
       deleted schedule entity would silently do nothing, which is a worse
       failure mode than asking).
 - [ ] Update `README.md`'s "Pairing with an automation" section — it
