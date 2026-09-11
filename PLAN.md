@@ -212,6 +212,16 @@ override persist until the next scheduled transition is often the
 annoying); for an irrigation valve, drift being silently uncorrected for
 hours is a real safety concern.
 
+**Confirmed by the user 2026-09-11**, with the concrete case that makes
+this non-negotiable: "turn the light on at this time" is fine, but if
+someone is in that room and turned the light *off* on purpose, forcing it
+back on because the schedule says "active" would be genuinely bad
+behavior. Their framing: maximum flexibility is worth it as long as it's
+covered by configuration (a real setting, not a hidden default) and
+doesn't introduce failure modes of its own — i.e., the default must be the
+*safe, unsurprising* one (transition-only, no fighting overrides), with
+strictness as something explicitly opted into per schedule, not assumed.
+
 Resolution: add an optional **periodic recheck** to the blueprint — a
 `time_pattern` trigger (e.g. every N minutes) that re-asserts "what should
 this be right now" on a cadence, in addition to the existing
@@ -239,17 +249,33 @@ never hand-edits YAML or opens Settings → Automations for this — but a
 real automation entity will exist and be visible there if they go looking.
 
 **Concrete tasks:**
-- [ ] Extend `local/schedule_sync.yaml` blueprint: `target_entity` (single)
+- [x] Extend `local/schedule_sync.yaml` blueprint: `target_entity` (single)
       → `target_entities` (list, entity selector, domain: switch/light,
       `multiple: true`). Same on-while-active/off-otherwise polarity as
-      today, just applied to each entity in the list.
-- [ ] Add the optional periodic-recheck `time_pattern` trigger, interval as
-      a blueprint input (minutes; a sentinel like 0 or omitted = disabled).
-      Re-verify restart-safety AND the new recheck behavior empirically
-      (force a mismatched state mid-window with recheck enabled, confirm
-      it self-corrects within roughly the configured interval) — don't
-      assume it works from the trigger existing; prove it the same way the
-      original restart-safety claim was proven.
+      before, applied to each entity in the list. **Verified live** on the
+      real HA instance: a throwaway multi-target test automation (two
+      `input_boolean` dummies as stand-ins, not real devices) correctly
+      turned both off from a single trigger.
+- [x] Added the optional periodic-recheck: a single always-present
+      `time_pattern` trigger firing every minute (`id: heartbeat`), gated
+      by a per-schedule `recheck_interval_minutes` input (0/default =
+      disabled) via `now().minute % interval == 0` — one static trigger
+      covers any interval rather than needing per-interval trigger
+      definitions. **Verified with a real controlled experiment**, not
+      simulated: forced two dummy entities into a mismatched state, one
+      bound to a recheck=0 automation and one to recheck=1; after ~2.5
+      real minutes elapsed (no manual trigger calls), the recheck=0 one
+      was still wrong (correctly untouched — proves "off" really means
+      off, not "just short of firing yet") and the recheck=1 one had been
+      corrected back to the right state by the real heartbeat trigger
+      firing naturally.
+- Gotcha hit again during this work: editing a blueprint file on disk and
+  calling `automation.reload` immediately can still validate/run against
+  the *old* schema for one call (`Missing input target_entity` even though
+  `target_entities` was confirmed on disk) — a second `reload` a few
+  seconds later picked up the change fine. Build in a retry/longer-wait
+  expectation for any future scripted blueprint edit+reload, same as the
+  first time this was hit earlier in the project.
 - [ ] Linking convention between a `schedule.*` entity and its bound
       automation — simplest option: deterministic automation id derived
       from the schedule id (e.g. `schedule_sync_<schedule_id>`), looked up
