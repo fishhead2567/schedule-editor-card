@@ -1,0 +1,10 @@
+services:
+  ha-dev:
+    image: ghcr.io/home-assistant/home-assistant:stable
+    container_name: schedule-editor-card-dev
+    ports:
+      - "8124:8123"
+    volumes:
+      - ./config:/config
+      - ../dist:/config/www/community/schedule-editor-card:ro
+    restart: unless-stopped
