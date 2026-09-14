@@ -12,6 +12,12 @@ describe("errorMessage", () => {
     );
   });
 
+  it("extracts message from hass.callApi's {error, status_code, body} rejection shape", () => {
+    expect(
+      errorMessage({ error: "Response error: 404", status_code: 404, body: { message: "Resource not found" } })
+    ).toBe("Resource not found");
+  });
+
   it("falls back to String() for anything else", () => {
     expect(errorMessage("plain string")).toBe("plain string");
     expect(errorMessage(42)).toBe("42");

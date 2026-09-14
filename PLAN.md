@@ -371,26 +371,64 @@ real automation entity will exist and be visible there if they go looking.
   seconds later picked up the change fine. Build in a retry/longer-wait
   expectation for any future scripted blueprint edit+reload, same as the
   first time this was hit earlier in the project.
-- [ ] Linking convention between a `schedule.*` entity and its bound
-      automation — simplest option: deterministic automation id derived
-      from the schedule id (e.g. `schedule_sync_<schedule_id>`), looked up
-      directly rather than searched for.
-- [ ] Card UI: per-schedule, a multi-select entity picker (include groups)
-      plus the recheck-interval control. Likely reuse HA's own
-      `<ha-entity-picker>` element rather than hand-rolling one — check
-      whether that element is safely usable from a custom card's shadow
-      DOM before committing to it.
-- [ ] Combined create flow: creating a new schedule from the card should
-      offer to set up its automation binding (entities + recheck interval)
-      in the same step, not as a separate manual task.
-- [ ] Combined delete flow: deleting a schedule should prompt to also
-      delete its bound automation (an orphaned automation pointing at a
-      deleted schedule entity would silently do nothing, which is a worse
-      failure mode than asking).
-- [ ] Update `README.md`'s "Pairing with an automation" section — it
-      currently documents this as something the user sets up separately;
-      once Milestone 4 lands, the card does it, so the docs need to change
-      from "here's the pattern" to "the card does this for you."
+- [x] Linking convention: deterministic automation id `schedule_sync_<schedule_id>`
+      (`automation-api.ts`), looked up directly via `GET
+      config/automation/config/{id}` rather than searched for — a 404 means
+      "no binding yet," any other error is surfaced.
+- [x] Card UI: **resolved the open risk about `<ha-entity-picker>` empirically
+      before building anything** — probed the live dev instance and confirmed
+      both `ha-selector` and `ha-entity-picker` are globally registered
+      custom elements, usable from any shadow DOM including a custom card's.
+      Went with `<ha-selector>` (`.selector = {entity: {domain: [switch,
+      light], multiple: true}}`) since it's the exact same component/schema
+      HA's own blueprint-input forms render, not a different one. A new
+      "controls" icon (plug) in each schedule's header toggles a panel with
+      the selector plus a recheck-interval number input; the panel is
+      collapsed by default (consistent with UI feedback round 1 — this
+      does not reintroduce the "too long" problem).
+- [x] Combined delete flow: `handleDelete` now calls `deleteBinding()` before
+      `deleteSchedule()` — verified live with a disposable throwaway
+      schedule (bound to `switch.decorative_lights` via the actual UI, then
+      deleted via the actual delete button): schedule, automation config,
+      and automation entity all confirmed gone (404) afterward.
+- **Not done, deliberately deferred**: a combined *create* flow (prompting
+  for entities right when a new schedule is made). The "controls" panel is
+  reachable immediately after creation the same way as for any existing
+  schedule, so this is a minor convenience, not a functional gap — not
+  worth the extra flow complexity unless it turns out to matter in practice.
+- [x] Updated `README.md` (now "Controlling entities from a schedule") to
+      describe the card-managed flow instead of a separately-set-up
+      pattern, and added the blueprint itself to the repo at
+      `local/schedule_sync.yaml` (previously it only ever existed on the
+      real/dev HA instances directly, never committed here) so a fresh
+      install actually has something to copy in.
+- [ ] Nice-to-have, not done: a one-click My Home Assistant blueprint
+      import link/badge for `local/schedule_sync.yaml`, so installing it
+      doesn't require manually copying a file into
+      `config/blueprints/automation/local/`.
+
+**Verified fully end-to-end against the dev instance**, real click path
+throughout (not just API calls): added HA's built-in `demo:` platform to
+the dev instance's `configuration.yaml` (restarted the *disposable*
+container — fine, it's throwaway, not production) to get real `light`/
+`switch` entities to bind to, since a bare instance has none. Then:
+clicked the new controls icon on "New Sod Watering" → the real
+`ha-selector` rendered → drove its `value-changed` event with
+`light.bed_light` → confirmed via `GET config/automation/config/...` that
+`automation.schedule_sync_new_sod_watering_...` was created with the
+correct blueprint input → forced the light to the wrong state → fired the
+automation → **the real light entity flipped to match the schedule**. Full
+chain, card click to physical-equivalent device control, proven.
+
+Two new discoveries worth keeping:
+- `hass.callApi(method, path, data)` and `hass.callService(domain,
+  service, data)` are both available on the `hass` object every custom
+  card receives — no separate auth/connection plumbing needed for REST-
+  style config endpoints (automation CRUD) alongside the websocket calls
+  already used for `schedule/*`.
+- `hass.callApi` rejects with `{error, status_code, body: {message}}` — a
+  third error shape (after the two `errorMessage()` already handled),
+  now also covered by that same shared helper and unit-tested.
 
 ## Testing strategy
 

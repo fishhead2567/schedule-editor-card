@@ -34,16 +34,37 @@ entities:
   - schedule.new_sod_watering
 ```
 
-## Pairing with an automation
+## Controlling entities from a schedule
 
-This card intentionally does not know about switches, lights, or conditions
-— a `schedule` entity is just a weekly on/off signal. Pair it with a small
-blueprint automation that keeps a target entity in sync with the schedule's
-state, triggered both on the schedule changing and on Home Assistant startup
-(so it self-corrects instead of getting stuck if HA was down through a
-boundary). That pattern isn't part of this repo (it's just a normal
-automation), but it's the piece that makes the schedule actually do
-something.
+A `schedule` entity by itself is just a weekly on/off signal — something
+still has to flip real entities in response. The card manages that for
+you: click the plug icon in a schedule's header to open its **controls**
+panel, pick one or more entities (switch or light domain — group helpers
+work too, since they're just entities in those same domains), and
+optionally set a recheck interval.
+
+Under the hood this creates (and keeps in sync) a small automation built
+from a bundled blueprint, `local/schedule_sync.yaml` — restart-safe (it
+re-asserts the correct state on schedule transitions, on Home Assistant
+startup, and optionally on a fixed interval you choose per schedule) —
+deterministically named `schedule_sync_<schedule id>` so the card can
+find, update, or remove it without ever asking you to open Settings →
+Automations. Deleting a schedule from the card also removes its bound
+automation.
+
+**Why an interval, and why off by default:** re-asserting state only at
+transitions/startup means a manual override (someone turns a light back
+off after the schedule turned it on) sticks until the next real
+transition — usually what you want. For something where silent drift
+matters more than respecting an override (e.g. a valve left open), set a
+recheck interval and it'll be corrected within roughly that many minutes
+instead.
+
+You'll need the blueprint itself installed once per Home Assistant
+instance: copy [`local/schedule_sync.yaml`](local/schedule_sync.yaml) into
+your `config/blueprints/automation/local/` directory. (A one-click My Home
+Assistant import link is a nice future improvement, not done yet — see
+PLAN.md.)
 
 ## Development
 

@@ -1,17 +1,21 @@
 import { HomeAssistant, ScheduleDays, ScheduleRecord, WEEKDAYS } from "./types";
 
 /**
- * HA's websocket connection (home-assistant-js-websocket) rejects
- * sendMessagePromise with the raw `{code, message}` error object from the
- * response, not an Error instance - so `e instanceof Error` is false and
- * `String(e)` yields "[object Object]" for the exact errors this card most
- * needs to surface (e.g. the native schedule domain's overlap rejection).
+ * Neither of HA's two error shapes this card runs into are Error instances:
+ * - hass.connection.sendMessagePromise rejects with the raw `{code, message}`
+ *   object from the websocket response (e.g. the schedule domain's overlap
+ *   rejection).
+ * - hass.callApi rejects with `{error, status_code, body: {message}}` (e.g.
+ *   the automation config REST endpoints used for entity bindings).
+ * `e instanceof Error` is false for both, so `String(e)` would yield
+ * "[object Object]" for exactly the errors most worth surfacing.
  */
 export function errorMessage(e: unknown): string {
   if (e instanceof Error) return e.message;
-  if (typeof e === "object" && e !== null && "message" in e) {
-    const m = (e as { message: unknown }).message;
-    if (typeof m === "string") return m;
+  if (typeof e === "object" && e !== null) {
+    const obj = e as { message?: unknown; body?: { message?: unknown } };
+    if (typeof obj.message === "string") return obj.message;
+    if (typeof obj.body?.message === "string") return obj.body.message;
   }
   return String(e);
 }

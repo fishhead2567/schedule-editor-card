@@ -1,0 +1,88 @@
+blueprint:
+  name: Sync entities to schedule (restart-safe)
+  description: >-
+    Keeps one or more switch/light entities (including groups) matched to a
+    schedule helper's on/off state. Re-checks on every Home Assistant
+    startup - so if HA is offline through a scheduled on->off (or off->on)
+    boundary, the targets still end up in the correct state as soon as HA
+    comes back, instead of staying stuck wherever they were left. Turning
+    OFF always happens unconditionally; an optional skip condition only
+    ever blocks turning ON.
+
+    Optionally also rechecks on a fixed interval (not just at schedule
+    transitions/startup) to correct drift from a manual override or
+    another automation - off by default, since for many entities (lights)
+    letting a manual override stick until the next real transition is the
+    desired behavior, not a bug. Turn it on per-schedule only where
+    silent drift is a real concern (e.g. a valve left open).
+  domain: automation
+  input:
+    schedule_entity:
+      name: Schedule
+      selector:
+        entity:
+          domain: schedule
+    target_entities:
+      name: Target entities (switch or light - group helpers work too)
+      selector:
+        entity:
+          domain:
+            - switch
+            - light
+          multiple: true
+    skip_on_entities:
+      name: Skip turning ON if any of these are 'on' (optional)
+      default: []
+      selector:
+        entity:
+          domain:
+            - binary_sensor
+            - input_boolean
+          multiple: true
+    recheck_interval_minutes:
+      name: Recheck interval, in minutes (optional)
+      description: >-
+        Re-assert the correct state on this cadence, not just at schedule
+        transitions and HA startup. Leave blank/0 to disable (default) -
+        that's the right choice for anything a manual override should be
+        allowed to stick to until the next transition. Set to e.g. 5 for
+        something where drift must be corrected quickly, like a valve.
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 60
+          mode: box
+
+triggers:
+  - trigger: state
+    entity_id: !input schedule_entity
+  - trigger: homeassistant
+    event: start
+  - trigger: time_pattern
+    minutes: "*"
+    id: heartbeat
+
+actions:
+  - variables:
+      schedule_entity: !input schedule_entity
+      skip_entities: !input skip_on_entities
+      recheck_interval: !input recheck_interval_minutes
+  - variables:
+      should_be_on: "{{ is_state(schedule_entity, 'on') }}"
+      blocked: "{{ skip_entities | select('is_state', 'on') | list | count > 0 }}"
+      is_heartbeat: "{{ trigger.id == 'heartbeat' }}"
+      recheck_due: >-
+        {{ recheck_interval | int(0) > 0 and (now().minute % (recheck_interval | int(1))) == 0 }}
+  - condition: "{{ not is_heartbeat or recheck_due }}"
+  - choose:
+      - conditions: "{{ should_be_on and not blocked }}"
+        sequence:
+          - action: homeassistant.turn_on
+            target:
+              entity_id: !input target_entities
+      - conditions: "{{ not should_be_on }}"
+        sequence:
+          - action: homeassistant.turn_off
+            target:
+              entity_id: !input target_entities

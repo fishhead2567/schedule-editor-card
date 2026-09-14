@@ -1,7 +1,8 @@
 import { LitElement, html, css, TemplateResult, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import { CardConfig, HomeAssistant, ScheduleBlock, ScheduleRecord, WEEKDAYS, Weekday } from "./types";
+import { AutomationBinding, CardConfig, HomeAssistant, ScheduleBlock, ScheduleRecord, WEEKDAYS, Weekday } from "./types";
 import { createSchedule, daysOf, deleteSchedule, errorMessage, listSchedules, updateSchedule, emptyDays } from "./schedule-api";
+import { deleteBinding, getBinding, saveBinding } from "./automation-api";
 import { currentMinutesOfDay, hasOverlap, percentOfDay, toMinutes } from "./time-utils";
 
 const DAY_LABEL: Record<Weekday, string> = {
@@ -40,6 +41,9 @@ export class ScheduleEditorCard extends LitElement {
   @state() private editingBlock: { scheduleId: string; day: Weekday; index: number } | null = null;
   @state() private editBlockDraft: { from: string; to: string } = { from: "00:00", to: "00:30" };
   @state() private newBlockDrafts: Record<string, NewBlockDraft> = {};
+  @state() private expandedBindings: Set<string> = new Set();
+  // undefined = not fetched yet, null = fetched, no binding exists.
+  @state() private bindings: Record<string, AutomationBinding | null | undefined> = {};
 
   private nowTimer?: number;
   private todayWeekday: Weekday = JS_DAY_TO_WEEKDAY[new Date().getDay()];
@@ -118,6 +122,40 @@ export class ScheduleEditorCard extends LitElement {
     this.expandedTimelines = next;
   }
 
+  private async toggleBindingPanel(scheduleId: string): Promise<void> {
+    const next = new Set(this.expandedBindings);
+    if (next.has(scheduleId)) {
+      next.delete(scheduleId);
+      this.expandedBindings = next;
+      return;
+    }
+    next.add(scheduleId);
+    this.expandedBindings = next;
+    if (this.bindings[scheduleId] === undefined) {
+      try {
+        const binding = await getBinding(this.hass, scheduleId);
+        this.bindings = { ...this.bindings, [scheduleId]: binding };
+      } catch (e) {
+        this.error = errorMessage(e);
+      }
+    }
+  }
+
+  private async handleBindingChange(record: ScheduleRecord, patch: Partial<AutomationBinding>): Promise<void> {
+    const current = this.bindings[record.id] ?? { entities: [], recheckMinutes: 0 };
+    const next: AutomationBinding = { ...current, ...patch };
+    // Optimistic update so the picker doesn't visually snap back while the
+    // save is in flight.
+    this.bindings = { ...this.bindings, [record.id]: next };
+    try {
+      await saveBinding(this.hass, record.id, record.name, next);
+    } catch (e) {
+      this.error = errorMessage(e);
+      // Revert on failure rather than leave the UI claiming a save that didn't happen.
+      this.bindings = { ...this.bindings, [record.id]: current };
+    }
+  }
+
   private async handleAddSchedule(): Promise<void> {
     const name = window.prompt("Name for the new schedule?");
     if (!name) return;
@@ -143,6 +181,10 @@ export class ScheduleEditorCard extends LitElement {
   private async handleDelete(record: ScheduleRecord): Promise<void> {
     if (!window.confirm(`Delete "${record.name}"? This cannot be undone.`)) return;
     try {
+      // Delete the bound automation first (if any) - an orphaned automation
+      // pointing at a since-deleted schedule entity would silently do
+      // nothing, which is a worse failure mode than a slightly slower delete.
+      await deleteBinding(this.hass, record.id);
       await deleteSchedule(this.hass, record.id);
       this.schedules = this.schedules.filter((s) => s.id !== record.id);
     } catch (e) {
@@ -236,7 +278,10 @@ export class ScheduleEditorCard extends LitElement {
   private renderSchedule(record: ScheduleRecord): TemplateResult {
     const isOn = this.stateOf(record.id) === "on";
     const expanded = this.expandedTimelines.has(record.id);
+    const bindingsOpen = this.expandedBindings.has(record.id);
     const blocks = this.flatBlocks(record);
+    const binding = this.bindings[record.id];
+    const boundCount = binding?.entities.length ?? 0;
     return html`
       <div class="schedule">
         <div class="schedule-header">
@@ -250,6 +295,13 @@ export class ScheduleEditorCard extends LitElement {
           <span class="name">${record.name}</span>
           <span class="pill ${isOn ? "on" : "off"}">${isOn ? "Active now" : "Idle"}</span>
           <span class="spacer"></span>
+          <ha-icon-button
+            title=${boundCount > 0 ? `Controls ${boundCount} ${boundCount === 1 ? "entity" : "entities"}` : "Controls: none set"}
+            class=${boundCount > 0 ? "has-binding" : ""}
+            @click=${() => this.toggleBindingPanel(record.id)}
+          >
+            <ha-icon icon="mdi:power-plug-outline"></ha-icon>
+          </ha-icon-button>
           <ha-icon-button @click=${() => this.handleDuplicate(record)} title="Duplicate">
             <ha-icon icon="mdi:content-copy"></ha-icon>
           </ha-icon-button>
@@ -257,6 +309,8 @@ export class ScheduleEditorCard extends LitElement {
             <ha-icon icon="mdi:delete"></ha-icon>
           </ha-icon-button>
         </div>
+
+        ${bindingsOpen ? this.renderBindingPanel(record) : nothing}
 
         <div class="block-list">
           ${blocks.length === 0
@@ -268,6 +322,41 @@ export class ScheduleEditorCard extends LitElement {
         ${expanded
           ? html`<div class="days">${WEEKDAYS.map((day) => this.renderDayRow(record, day))}</div>`
           : nothing}
+      </div>
+    `;
+  }
+
+  private renderBindingPanel(record: ScheduleRecord): TemplateResult {
+    const binding = this.bindings[record.id];
+    if (binding === undefined) {
+      return html`<div class="binding-panel muted">Loading controls…</div>`;
+    }
+    const entities = binding?.entities ?? [];
+    const recheck = binding?.recheckMinutes ?? 0;
+    return html`
+      <div class="binding-panel">
+        <div class="binding-row">
+          <span class="binding-label">Controls</span>
+          <ha-selector
+            .hass=${this.hass}
+            .selector=${{ entity: { domain: ["switch", "light"], multiple: true } }}
+            .value=${entities}
+            @value-changed=${(e: CustomEvent<{ value: string[] }>) =>
+              this.handleBindingChange(record, { entities: e.detail.value })}
+          ></ha-selector>
+        </div>
+        <div class="binding-row">
+          <span class="binding-label">Recheck every</span>
+          <input
+            type="number"
+            min="0"
+            max="60"
+            .value=${String(recheck)}
+            @change=${(e: Event) =>
+              this.handleBindingChange(record, { recheckMinutes: Number((e.target as HTMLInputElement).value) })}
+          />
+          <span class="muted">min (0 = only at transitions/startup)</span>
+        </div>
       </div>
     `;
   }
@@ -419,6 +508,33 @@ export class ScheduleEditorCard extends LitElement {
     }
     .spacer {
       flex: 1;
+    }
+    .has-binding {
+      color: var(--state-active-color, #2196f3);
+    }
+    .binding-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 4px 0 10px 40px;
+    }
+    .binding-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .binding-row ha-selector {
+      flex: 1;
+      max-width: 480px;
+    }
+    .binding-label {
+      font-size: 0.8em;
+      color: var(--secondary-text-color);
+      width: 90px;
+      flex-shrink: 0;
+    }
+    .binding-row input[type="number"] {
+      width: 60px;
     }
     .block-list {
       display: flex;
