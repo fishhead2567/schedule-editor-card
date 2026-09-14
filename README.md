@@ -126,8 +126,14 @@ docker compose -f dev/docker-compose.yml up -d
 - Open http://localhost:8124 and complete the one-time onboarding (creates
   a local user; none of this touches any other Home Assistant instance).
 - Settings → your profile → Security → **Create long-lived access token**.
-- Seed some test schedules covering edge cases (empty schedule, single
-  block, multiple blocks on specific weekdays, a block near midnight):
+- Seed the fixture set — the canonical, checked-in test data (not
+  something reinvented each session): a handful of varied edge cases
+  (empty schedule, single block, multiple blocks on specific weekdays, a
+  block near midnight) plus a deliberately dense set (19 schedules,
+  structured as two independent full-day-coverage "layers" so at least 2
+  are always active) for testing how the UI holds up at real volume.
+  Idempotent — safe to re-run any time, existing fixtures are skipped by
+  name rather than duplicated:
 
   ```bash
   HA_HOST=localhost:8124 HA_TOKEN=<paste> node dev/seed-schedules.mjs

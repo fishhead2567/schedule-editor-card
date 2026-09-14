@@ -535,6 +535,71 @@ during this dev cycle; production installs won't hit this the same way
 since HACS-driven installs typically get a fresh resource version per
 release rather than silently overwriting the same file path.
 
+### Milestone 6 — Reproducible dense fixture set + first UI-scale test (done, 2026-09-14)
+
+User feedback: fixture data had been created one-off via ad-hoc scratch
+scripts each session (never checked in beyond the original 4 basic
+fixtures), and they wanted to actually see how the UI holds up with real
+volume — "I want 2 schedules going at all times. I want at least 15
+schedule entities total."
+
+**`dev/seed-schedules.mjs` is now the single source of truth for the dev
+instance's fixture set**, checked into the repo, not scratch. Idempotent
+by design: looks up each fixture by name first and skips ones that already
+exist, so re-running it (e.g. after `docker compose down -v && up -d` for
+a clean slate, or just on top of a running instance) is always safe and
+never creates duplicates.
+
+**"2 schedules active at all times," proven, not eyeballed:** built as two
+independent `buildCoverageLayer()` generators - Layer A, 6 schedules x 4h
+("Security Lighting"), Layer B, 8 schedules x 3h ("Perimeter Sensors
+Armed") - each tiling the full 24h, every day, with zero gaps on its own.
+Any one full-coverage layer alone guarantees exactly one of its schedules
+is active at every instant; two independent such layers therefore
+guarantee at least 2 active at once, regardless of how their slot
+boundaries line up. Plus 5 curated, varied fixtures (empty, sparse,
+multi-block-per-day, weekend-only) for realistic diversity on top of the
+dense layers - 19 fixtures total (6+8+5), comfortably over the "at least
+15" ask, plus the user's own manually-created "testify!" = 20 real
+schedule entities on the instance.
+
+**A real bug in the seed script itself, caught by running it, not by
+inspection:** the coverage-layer generator's last slot in each layer
+computed `to: "00:00:00"` for "until midnight," which the native schedule
+domain rejects (`to` must be after `from` on the same day) - it has no
+native way to express "until midnight," same constraint the
+hand-written "Near Midnight Block" fixture had already worked around.
+Fixed by special-casing the final slot to `to: "23:59:59"` instead,
+matching that existing pattern.
+
+**The coverage guarantee itself was then verified exhaustively, not just
+trusted from the math** - and this verification caught a second, purely
+self-inflicted bug: a first check script sampled at 1-minute resolution
+using a `toMin()` helper that silently dropped the seconds component of
+`"23:59:59"` (truncating it to effectively `"23:59:00"`), which made the
+last minute of each day look uncovered. Re-verified at 5-second resolution
+with proper seconds handling: **minimum simultaneous-active count across
+the full day is exactly 2, with zero exceptions** (sampled 17,280 points
+across 86,400 seconds). The lesson generalizes: a verification script is
+also code and can have its own bugs - a suspicious result should prompt
+checking the checker before concluding the thing being checked is wrong.
+
+**UI-scale findings, from actually looking at 20 schedules rendered, not
+guessing:**
+- `schedule-timeline-card` **scales well** - one compact row per schedule
+  regardless of how many blocks it has; 20 tracks fit in a reasonable
+  height with no structural problem.
+- `schedule-editor-card` **does not scale well** - a schedule active every
+  day with an identical block (e.g. "Security Lighting 00:00-04:00")
+  currently renders that same block as 7 separate, visually-identical
+  chips, one per weekday. At 20 schedules this makes for a very long, very
+  repetitive page. **Not fixed yet** - flagged as a concrete finding for
+  the user's reaction rather than redesigned unilaterally, consistent with
+  how UI-opinion-dependent work has been handled throughout this project.
+  Likely fix direction if/when picked up: detect "same block appears on
+  every day" and collapse it to a single "Daily" chip instead of 7
+  identical ones - not attempted yet, pending the user's read on it.
+
 ## Testing strategy
 
 Matches how HACS frontend cards are actually tested in practice (there is
