@@ -125,8 +125,9 @@ section for the full reasoning).
   correctly surfaces that message (was a real bug, now fixed and
   unit-tested) — see Milestone 1. No drag-to-resize still (click + time
   inputs only) — that remains a Milestone 3 nice-to-have, not required.
-- No handling of the `icon` field being changed after creation (set once at
-  create time, no rename/re-icon affordance).
+- ~~No handling of the icon field being changed after creation~~ — done
+  2026-09-14, see Milestone 1 addendum below. No rename affordance for the
+  schedule's name yet (not asked for; icon was the specific ask).
 - No visual editor (`getConfigElement`) for the card's own YAML config in
   HA's dashboard UI — currently config is `entities` (optional list) only,
   hand-typed in YAML mode.
@@ -178,6 +179,15 @@ Goal: a working, tested, CI-green schedule CRUD card.
 - [x] Narrow-viewport (phone width, 390px) visual check — passes with zero
       code changes, confirmed by screenshot; no horizontal overflow or
       cramped controls.
+- [x] **(Added 2026-09-14)** Change a schedule's icon after creation —
+      clicking the icon in the header now opens `<ha-selector>` with an
+      `{icon: {}}` selector (confirmed `ha-icon-picker`/`ha-selector` both
+      globally registered before building against them, same as the
+      entity-binding work). Verified live: clicked the icon on "Empty
+      Schedule," set it to `mdi:leaf` through the actual picker, confirmed
+      the change persisted via `schedule/list` and re-rendered correctly.
+      Renaming a schedule's name is still not supported — not asked for,
+      icon was the specific request.
 
 ### Milestone 2 — First real release (done, with one deliberate exception)
 Goal: prove the actual HACS distribution path works, not just CI.

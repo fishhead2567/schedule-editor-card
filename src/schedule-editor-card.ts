@@ -44,6 +44,7 @@ export class ScheduleEditorCard extends LitElement {
   @state() private expandedBindings: Set<string> = new Set();
   // undefined = not fetched yet, null = fetched, no binding exists.
   @state() private bindings: Record<string, AutomationBinding | null | undefined> = {};
+  @state() private editingIconFor: string | null = null;
 
   private nowTimer?: number;
   private todayWeekday: Weekday = JS_DAY_TO_WEEKDAY[new Date().getDay()];
@@ -120,6 +121,20 @@ export class ScheduleEditorCard extends LitElement {
     if (next.has(scheduleId)) next.delete(scheduleId);
     else next.add(scheduleId);
     this.expandedTimelines = next;
+  }
+
+  private toggleIconEditor(scheduleId: string): void {
+    this.editingIconFor = this.editingIconFor === scheduleId ? null : scheduleId;
+  }
+
+  private async handleIconChange(record: ScheduleRecord, icon: string): Promise<void> {
+    this.editingIconFor = null;
+    try {
+      const updated = await updateSchedule(this.hass, record.id, record.name, icon, daysOf(record));
+      this.schedules = this.schedules.map((s) => (s.id === record.id ? updated : s));
+    } catch (e) {
+      this.error = errorMessage(e);
+    }
   }
 
   private async toggleBindingPanel(scheduleId: string): Promise<void> {
@@ -291,7 +306,13 @@ export class ScheduleEditorCard extends LitElement {
           >
             <ha-icon icon=${expanded ? "mdi:chevron-down" : "mdi:chevron-right"}></ha-icon>
           </ha-icon-button>
-          <ha-icon icon=${record.icon || "mdi:calendar-clock"}></ha-icon>
+          <button
+            class="icon-button"
+            title="Change icon"
+            @click=${() => this.toggleIconEditor(record.id)}
+          >
+            <ha-icon icon=${record.icon || "mdi:calendar-clock"}></ha-icon>
+          </button>
           <span class="name">${record.name}</span>
           <span class="pill ${isOn ? "on" : "off"}">${isOn ? "Active now" : "Idle"}</span>
           <span class="spacer"></span>
@@ -310,6 +331,7 @@ export class ScheduleEditorCard extends LitElement {
           </ha-icon-button>
         </div>
 
+        ${this.editingIconFor === record.id ? this.renderIconEditor(record) : nothing}
         ${bindingsOpen ? this.renderBindingPanel(record) : nothing}
 
         <div class="block-list">
@@ -322,6 +344,19 @@ export class ScheduleEditorCard extends LitElement {
         ${expanded
           ? html`<div class="days">${WEEKDAYS.map((day) => this.renderDayRow(record, day))}</div>`
           : nothing}
+      </div>
+    `;
+  }
+
+  private renderIconEditor(record: ScheduleRecord): TemplateResult {
+    return html`
+      <div class="icon-editor">
+        <ha-selector
+          .hass=${this.hass}
+          .selector=${{ icon: {} }}
+          .value=${record.icon ?? ""}
+          @value-changed=${(e: CustomEvent<{ value: string }>) => this.handleIconChange(record, e.detail.value)}
+        ></ha-selector>
       </div>
     `;
   }
@@ -508,6 +543,23 @@ export class ScheduleEditorCard extends LitElement {
     }
     .spacer {
       flex: 1;
+    }
+    .icon-button {
+      border: none;
+      background: none;
+      cursor: pointer;
+      padding: 8px;
+      display: flex;
+      align-items: center;
+      color: inherit;
+      border-radius: 50%;
+    }
+    .icon-button:hover {
+      background: var(--secondary-background-color);
+    }
+    .icon-editor {
+      padding: 4px 0 10px 40px;
+      max-width: 320px;
     }
     .has-binding {
       color: var(--state-active-color, #2196f3);
