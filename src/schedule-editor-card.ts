@@ -3,6 +3,7 @@ import { customElement, property, state } from "lit/decorators.js";
 import { AutomationBinding, CardConfig, HomeAssistant, ScheduleBlock, ScheduleRecord, WEEKDAYS, Weekday } from "./types";
 import { createSchedule, daysOf, deleteSchedule, errorMessage, listSchedules, updateSchedule, emptyDays } from "./schedule-api";
 import { deleteBinding, getBinding, saveBinding } from "./automation-api";
+import { DEFAULT_COLOR, getColors, setColor } from "./user-data-api";
 import { currentMinutesOfDay, hasOverlap, percentOfDay, toMinutes } from "./time-utils";
 
 const DAY_LABEL: Record<Weekday, string> = {
@@ -45,6 +46,7 @@ export class ScheduleEditorCard extends LitElement {
   // undefined = not fetched yet, null = fetched, no binding exists.
   @state() private bindings: Record<string, AutomationBinding | null | undefined> = {};
   @state() private editingIconFor: string | null = null;
+  @state() private colors: Record<string, string> = {};
 
   private nowTimer?: number;
   private todayWeekday: Weekday = JS_DAY_TO_WEEKDAY[new Date().getDay()];
@@ -60,6 +62,9 @@ export class ScheduleEditorCard extends LitElement {
   connectedCallback(): void {
     super.connectedCallback();
     this.refresh();
+    getColors(this.hass)
+      .then((colors) => (this.colors = colors))
+      .catch((e) => (this.error = errorMessage(e)));
     // Re-render the "now" line every minute; no need to re-fetch schedules for this.
     this.nowTimer = window.setInterval(() => {
       this.todayWeekday = JS_DAY_TO_WEEKDAY[new Date().getDay()];
@@ -86,6 +91,29 @@ export class ScheduleEditorCard extends LitElement {
     } finally {
       this.loading = false;
     }
+    this.loadAllBindings();
+  }
+
+  /**
+   * The "controls" plug icon needs to show as bound (or not) for every
+   * schedule as soon as the card loads, not just for whichever one you
+   * happen to open - fetch all of them up front rather than lazily on
+   * panel-open (a real bug: without this, the highlight only ever appeared
+   * after clicking into a schedule's panel at least once that session, so
+   * it looked like the binding itself was forgotten on every refresh).
+   */
+  private async loadAllBindings(): Promise<void> {
+    const results = await Promise.allSettled(
+      this.schedules.map(async (s) => [s.id, await getBinding(this.hass, s.id)] as const)
+    );
+    const next = { ...this.bindings };
+    for (const r of results) {
+      if (r.status === "fulfilled") {
+        const [id, binding] = r.value;
+        next[id] = binding;
+      }
+    }
+    this.bindings = next;
   }
 
   private entityIdFor(scheduleId: string): string {
@@ -121,6 +149,21 @@ export class ScheduleEditorCard extends LitElement {
     if (next.has(scheduleId)) next.delete(scheduleId);
     else next.add(scheduleId);
     this.expandedTimelines = next;
+  }
+
+  private colorOf(scheduleId: string): string {
+    return this.colors[scheduleId] ?? DEFAULT_COLOR;
+  }
+
+  private async handleColorChange(scheduleId: string, color: string): Promise<void> {
+    const previous = this.colors;
+    this.colors = { ...this.colors, [scheduleId]: color };
+    try {
+      await setColor(this.hass, scheduleId, color);
+    } catch (e) {
+      this.error = errorMessage(e);
+      this.colors = previous;
+    }
   }
 
   private toggleIconEditor(scheduleId: string): void {
@@ -316,6 +359,13 @@ export class ScheduleEditorCard extends LitElement {
           <span class="name">${record.name}</span>
           <span class="pill ${isOn ? "on" : "off"}">${isOn ? "Active now" : "Idle"}</span>
           <span class="spacer"></span>
+          <label class="color-swatch" title="Change color" style="background:${this.colorOf(record.id)}">
+            <input
+              type="color"
+              .value=${this.colorOf(record.id)}
+              @input=${(e: Event) => this.handleColorChange(record.id, (e.target as HTMLInputElement).value)}
+            />
+          </label>
           <ha-icon-button
             title=${boundCount > 0 ? `Controls ${boundCount} ${boundCount === 1 ? "entity" : "entities"}` : "Controls: none set"}
             class=${boundCount > 0 ? "has-binding" : ""}
@@ -560,6 +610,25 @@ export class ScheduleEditorCard extends LitElement {
     .icon-editor {
       padding: 4px 0 10px 40px;
       max-width: 320px;
+    }
+    .color-swatch {
+      display: inline-flex;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      border: 2px solid var(--divider-color);
+      cursor: pointer;
+      overflow: hidden;
+      flex-shrink: 0;
+      margin: 0 4px;
+    }
+    .color-swatch input[type="color"] {
+      opacity: 0;
+      width: 100%;
+      height: 100%;
+      cursor: pointer;
+      border: none;
+      padding: 0;
     }
     .has-binding {
       color: var(--state-active-color, #2196f3);

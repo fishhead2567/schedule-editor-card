@@ -1,10 +1,18 @@
 # Schedule Editor Card
 
-A Lovelace card for Home Assistant's **native `schedule` helper domain** — create,
-edit, duplicate and delete weekly schedules directly from your dashboard, with
-day-by-day timeline bars and a live "now" indicator.
+Two Lovelace cards, one package, for Home Assistant's **native `schedule`
+helper domain**:
 
-![Schedule Editor Card showing four schedules with weekly timeline bars and a live now-indicator](docs/screenshot.png)
+- **`schedule-editor-card`** — create, edit, duplicate and delete weekly
+  schedules, pick the icon and color, and pick which entities they control,
+  all from your dashboard.
+- **`schedule-timeline-card`** — a read-only, at-a-glance view: one track
+  per schedule, today's blocks, a shared "now" line moving across all of
+  them together.
+
+![Schedule Editor Card showing schedules with per-schedule colors and controls](docs/screenshot.png)
+
+![Schedule Timeline Card showing one track per schedule with a shared now-line](docs/timeline-screenshot.png)
 
 Home Assistant's built-in Schedule helper computes its on/off state live from
 the clock (not from a one-time trigger), which makes it a good fit for
@@ -13,9 +21,10 @@ if Home Assistant is restarted or offline through a scheduled boundary. But
 the only way to edit one has been the Helpers settings page, one schedule at
 a time, with no dashboard view across several. This card fixes that.
 
-This card only edits `schedule.*` entities themselves (the weekly time
-blocks). Wiring a schedule's on/off state to an actual switch/light is a
-separate concern — see [this pattern](#pairing-with-an-automation) below.
+`schedule-editor-card` only edits `schedule.*` entities themselves (the
+weekly time blocks, icon, color) plus the optional binding to real entities —
+see [Controlling entities from a schedule](#controlling-entities-from-a-schedule)
+below for how that last part works.
 
 ## Installation (HACS)
 
@@ -33,6 +42,26 @@ title: Schedules
 entities:
   - schedule.new_sod_watering
 ```
+
+```yaml
+type: custom:schedule-timeline-card
+title: Timeline
+# Optional, same meaning as above.
+entities:
+  - schedule.new_sod_watering
+```
+
+Click a schedule's icon (in `schedule-editor-card`) to change it, or the
+color swatch next to the entity controls to pick a color — both apply to
+that schedule everywhere, including in `schedule-timeline-card`. Colors are
+stored via Home Assistant's own per-user data storage (the same mechanism
+the frontend itself uses for things like dashboard state), not
+`localStorage`, so they follow your account across devices/browsers rather
+than being stuck to one.
+
+In the timeline card, click a track's icon to show its schedule's name (also
+available as a hover tooltip on desktop); a track's bar is drawn solid when
+that block is the one currently active, dimmed otherwise.
 
 ## Controlling entities from a schedule
 

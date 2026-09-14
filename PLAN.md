@@ -440,6 +440,101 @@ Two new discoveries worth keeping:
   third error shape (after the two `errorMessage()` already handled),
   now also covered by that same shared helper and unit-tested.
 
+### Milestone 5 — Timeline card, per-schedule icon/color (done, 2026-09-14)
+
+Two user requests handled together since they share the same color-storage
+question: a second, read-only card giving an at-a-glance multi-schedule
+view, plus the ability to customize a schedule's icon and pick a color for
+it (used by both cards).
+
+**A real bug found and fixed along the way** — reported by the user
+directly: the "controls" plug icon only showed its bound/highlighted state
+*after* you'd opened that specific schedule's panel at least once that
+session, because `getBinding()` was only ever called lazily on
+panel-open. On a fresh page load, nothing had been fetched yet, so a
+schedule with real entities bound looked identical to one with none —
+looked like "the binding gets forgotten on refresh," but was really just
+"never fetched yet." Fixed by fetching every schedule's binding up front
+in `refresh()` (`loadAllBindings()`, parallel `Promise.allSettled`) instead
+of waiting for the panel to open; the lazy fetch stays as a fallback for
+schedules created after the initial load.
+
+**Timezone gotcha, found from a real user report, not proactively caught:**
+the user set a block intending "10:45 PM" their own time and it stayed
+"Idle" when they expected it active. Root cause: this dev instance's HA
+core timezone had never been explicitly set during scripted onboarding, so
+it silently defaulted to UTC — and schedule blocks are evaluated purely
+against whatever timezone HA core is configured for, not the browser's
+timezone (unlike some other entities that do client-side tz-aware
+rendering). Fixed by setting the dev instance to `America/Chicago` via the
+`config/core/update` websocket command, matching the real production
+instance — chosen deliberately over matching the user's momentary physical
+location, since the dev sandbox exists to test what will actually run on
+the CDT-based real home, not wherever the tester happens to be sitting.
+**Lesson for any future scripted HA onboarding**: explicitly set
+`time_zone` (and probably `latitude`/`longitude`/`unit_system`) rather than
+leaving `core_config` onboarding a no-op default — UTC-by-accident is a
+real, confusing failure mode, not a hypothetical one.
+
+**Color storage:** probed `frontend/get_user_data` / `frontend/set_user_data`
+before building against them (same discipline as every other new API
+surface this project has touched) — confirmed both work and are the exact
+mechanism HA's own frontend uses for per-user settings, so colors persist
+per HA account rather than per-browser the way `localStorage` would.
+Single key `schedule_editor_card_colors` holding `{scheduleId: hexColor}`,
+shared between both cards via `user-data-api.ts`.
+
+**Icon editing:** same pattern as the entity-binding picker — confirmed
+`ha-selector`/`ha-icon-picker` are globally registered before building
+(they were, already known from Milestone 4's probe) — click a schedule's
+icon to open `<ha-selector selector="{icon: {}}">` inline, saves via the
+existing `updateSchedule()` call. Verified live: changed "Empty Schedule"'s
+icon to `mdi:leaf` through the real picker, confirmed it persisted and
+re-rendered.
+
+**Timeline card (`schedule-timeline-card`):** one track per schedule,
+today's blocks only, icon per track (click, or hover on desktop, to show
+the schedule's name — implemented as a native `title` attribute for free
+desktop hover plus a click-toggled popover so mobile taps get the same
+result), a single shared "now" line positioned across every track at once
+(not repeated per row — a genuinely different, better design than the
+editor card's per-weekday-row now-line, since this view's whole point is
+comparing multiple schedules against one shared clock), and per-block
+"active right now" highlighting computed independently per block from
+its own start/end vs. current time (not from the schedule entity's `state`
+attribute) so it can never visually disagree with where the now-line
+itself is drawn. Deliberately read-only — no CRUD duplicated from the
+editor card, keeping each card single-purpose.
+
+**Packaging decision:** both cards ship in the *same* bundle
+(`dist/schedule-editor-card.js`) via a new `src/index.ts` entry that
+imports both card modules — chosen specifically to avoid touching HACS
+packaging (`hacs.json`'s `filename`, the release workflow, the Lovelace
+resource the user already has registered) for what is, from HACS's point
+of view, still one plugin resource. Each card still self-registers its own
+`window.customCards` entry so both show up individually in the dashboard's
+"add card" picker.
+
+**All verified live against the dev instance**, real click paths, not just
+API calls: confirmed the binding-highlight bug reproduced *before* the fix
+(fresh load, no panel opened, icon shows unbound) and resolved *after*
+(fresh load, icon correctly shows bound with zero interaction); confirmed
+the timezone fix by checking `testify!`'s computed state against real wall
+-clock CDT time; changed a schedule's icon and multiple schedules' colors
+through their actual pickers and confirmed persistence via the respective
+list/get_user_data calls; loaded the timeline card fresh and confirmed
+colors, icons, and the shared now-line render correctly; clicked a track's
+icon and confirmed the name tooltip appears.
+
+**Gotcha reconfirmed** (same as Milestone 4, worth noting it recurred): a
+lovelace resource URL with no cache-busting query string can serve stale
+JS after a rebuild even across a full browser refresh — this is what the
+user actually hit first when the icon/binding features "didn't show up."
+Fixed by bumping `?v=<timestamp>` on the resource URL after every rebuild
+during this dev cycle; production installs won't hit this the same way
+since HACS-driven installs typically get a fresh resource version per
+release rather than silently overwriting the same file path.
+
 ## Testing strategy
 
 Matches how HACS frontend cards are actually tested in practice (there is

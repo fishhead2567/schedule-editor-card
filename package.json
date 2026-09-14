@@ -5,7 +5,7 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "build": "esbuild src/schedule-editor-card.ts --bundle --format=esm --outfile=dist/schedule-editor-card.js",
+    "build": "esbuild src/index.ts --bundle --format=esm --outfile=dist/schedule-editor-card.js",
     "watch": "npm run build -- --watch",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
