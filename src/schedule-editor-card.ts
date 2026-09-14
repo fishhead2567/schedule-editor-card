@@ -4,7 +4,7 @@ import { AutomationBinding, CardConfig, GroupedBlock, HomeAssistant, ScheduleDay
 import { createSchedule, daysOf, deleteSchedule, errorMessage, groupedBlocks, listSchedules, updateSchedule, emptyDays } from "./schedule-api";
 import { deleteBinding, getBinding, saveBinding } from "./automation-api";
 import { DEFAULT_COLOR, getColors, setColor } from "./user-data-api";
-import { currentMinutesOfDay, hasOverlap, percentOfDay, toMinutes } from "./time-utils";
+import { currentMinutesInZone, hasOverlap, percentOfDay, todayWeekdayInZone, toMinutes } from "./time-utils";
 
 const DAY_LABEL: Record<Weekday, string> = {
   monday: "Mon",
@@ -25,9 +25,6 @@ const DAY_PILL_LABEL: Record<Weekday, string> = {
   saturday: "Sa",
   sunday: "Su",
 };
-
-// getDay() is 0=Sunday..6=Saturday; WEEKDAYS is Monday-first.
-const JS_DAY_TO_WEEKDAY: Weekday[] = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 
 interface NewGroupDraft {
   from: string;
@@ -57,7 +54,11 @@ export class ScheduleEditorCard extends LitElement {
   @state() private colors: Record<string, string> = {};
 
   private nowTimer?: number;
-  private todayWeekday: Weekday = JS_DAY_TO_WEEKDAY[new Date().getDay()];
+  // Placeholder until connectedCallback can consult hass.config.time_zone;
+  // todayWeekdayInZone/currentMinutesInZone fall back to the browser's own
+  // zone if hass isn't ready yet, so this is never actually wrong, just
+  // momentarily using the fallback rather than the server's real zone.
+  private todayWeekday: Weekday = "monday";
 
   setConfig(config: CardConfig): void {
     this.config = { type: config.type, title: config.title, entities: config.entities };
@@ -70,12 +71,13 @@ export class ScheduleEditorCard extends LitElement {
   connectedCallback(): void {
     super.connectedCallback();
     this.refresh();
+    this.todayWeekday = todayWeekdayInZone(this.hass?.config?.time_zone);
     getColors(this.hass)
       .then((colors) => (this.colors = colors))
       .catch((e) => (this.error = errorMessage(e)));
     // Re-render the "now" line every minute; no need to re-fetch schedules for this.
     this.nowTimer = window.setInterval(() => {
-      this.todayWeekday = JS_DAY_TO_WEEKDAY[new Date().getDay()];
+      this.todayWeekday = todayWeekdayInZone(this.hass?.config?.time_zone);
       this.requestUpdate();
     }, 60_000);
   }
@@ -569,7 +571,7 @@ export class ScheduleEditorCard extends LitElement {
   private renderDayRow(record: ScheduleRecord, day: Weekday): TemplateResult {
     const blocks = daysOf(record)[day];
     const isToday = day === this.todayWeekday;
-    const nowPct = (currentMinutesOfDay() / 1440) * 100;
+    const nowPct = (currentMinutesInZone(this.hass?.config?.time_zone) / 1440) * 100;
 
     return html`
       <div class="day-row">

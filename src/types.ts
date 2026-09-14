@@ -60,4 +60,10 @@ export interface HomeAssistant {
   callApi: <T = unknown>(method: string, path: string, parameters?: unknown) => Promise<T>;
   callService: (domain: string, service: string, serviceData?: Record<string, unknown>) => Promise<unknown>;
   locale?: { language?: string };
+  /** hass.config.time_zone is the server's configured timezone (Settings ->
+   * System -> General) - schedule blocks are evaluated against this, not
+   * the browser's own timezone. See currentMinutesInZone/todayWeekdayInZone
+   * in time-utils.ts for why every "is this active now" computation must
+   * use this instead of a bare `new Date()`. */
+  config?: { time_zone?: string };
 }

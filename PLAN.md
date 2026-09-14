@@ -673,6 +673,79 @@ what the now-line means:
   initial 0.4 for safety margin), which contrasts against both the bars
   and the gaps between them.
 
+### Milestone 8 — Timeline day navigation, and a second real timezone bug found while building it (done, 2026-09-14)
+
+User ask: arrows to step the timeline forward/backward by day, with a date
+label, to preview upcoming schedules rather than only ever seeing today.
+
+**Before adding navigation, checked whether it was safe to build on the
+existing "now" logic - it wasn't.** `currentMinutesOfDay()`/`new Date()`
+throughout both cards read the *browser's* local timezone, not HA's
+configured server timezone (`hass.config.time_zone`) - the same class of
+bug already hit once this project (the `testify!` UTC-vs-CDT incident).
+Confirmed this was live, not hypothetical, by probing the dev instance:
+`hass.config.time_zone` is `"America/Chicago"` and is available on the
+standard card-facing `hass` object (added to the `HomeAssistant` type).
+Someone viewing the dashboard from a different zone than the server would
+see the "now" line, active-block highlighting, and even which weekday
+counts as "today" all silently disagree with the schedule entities' real
+evaluated state - worse than a cosmetic bug, since it would misrepresent
+whether something is actually about to run.
+
+Also worth noting: `hass.locale.time_zone` is a *separate*, genuine HA
+frontend setting (defaults to `"local"`, can be set to `"server"` in the
+user's profile) that governs how HA's own frontend displays *timestamps*
+elsewhere. Deliberately not used here - it's a display preference, whereas
+whether a schedule block is active is a fact that always depends on the
+server's zone regardless of the viewer's display preference, so respecting
+that setting for this specific computation would make the card *agree
+with the viewer's preference and disagree with reality*. Right call was
+to always use `hass.config.time_zone` for this specific question.
+
+Fixed with new zone-aware primitives in `time-utils.ts` -
+`currentMinutesInZone`, `todayWeekdayInZone` (both `Intl.DateTimeFormat`-
+based, falling back to the browser's own zone only if `hass.config` is
+ever unavailable rather than throwing) - unit-tested using fixed-offset
+zones (`Etc/GMT+5`, `UTC`) specifically chosen to avoid any DST-timing
+ambiguity in the tests themselves, including one test that deliberately
+picks an instant where the zone's calendar day and UTC's calendar day
+disagree, to prove the zone conversion is actually doing something. Wired
+into both cards, replacing every bare `new Date()`-based "now" computation
+- this was a real, independent fix to `schedule-editor-card` too, not just
+the timeline card, even though only the timeline card asked for navigation.
+
+**Day-of-week arithmetic deliberately doesn't touch calendar dates at
+all**: `addDaysToWeekday()` is pure modulo arithmetic on the `WEEKDAYS`
+array, since schedule blocks are keyed by weekday only - stepping "which
+weekday to show" needs no `Date` object, no timezone, nothing that could
+be wrong. The calendar date shown in the label ("Sep 15") is the only
+part that needs real date math, done with `dateLabelForOffset()`: extracts
+today's Y/M/D in the server's zone via `Intl`, then does day arithmetic on
+a UTC-anchored scratch `Date` (never converted through any real timezone)
+purely to get correct month/year rollovers from the platform's own
+calendar logic, then formats that back out via `Intl` pinned to `"UTC"` so
+the scratch date's arithmetic is never reinterpreted through another zone.
+Unit-tested including a month rollover and a year rollover.
+
+**UI:** prev/next chevron arrows either side of a date label
+("Today · Sep 14", "Tomorrow · Sep 15", "Yesterday · Sep 13", or
+"`<Weekday>` · `<date>`" further out), plus a "Today" link that appears
+only when not viewing today, to jump back in one click. The now-line, its
+time label, and per-block "active" highlighting are all suppressed
+whenever viewing a day other than today - "active right now" and a
+moving playhead are meaningless on a preview of a day that hasn't
+happened yet (or has already passed).
+
+**Verified live, not just by reading the code:** loaded today's view,
+confirmed the date label and now-line; advanced two days via the actual
+arrow clicks and confirmed the date label updated correctly, the now-line
+disappeared, and a "Today" link appeared; clicked "Today" and confirmed
+it jumped back with the now-line restored. Separately confirmed the
+weekday-filtering itself is real, not just cosmetic date-label churn: a
+schedule active only Tue/Thu/Fri/Sun ("New Sod Watering") correctly shows
+no blocks on the actual-today Monday view and correctly shows its two
+blocks after advancing one day to Tuesday.
+
 ## Testing strategy
 
 Matches how HACS frontend cards are actually tested in practice (there is

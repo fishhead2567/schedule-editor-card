@@ -67,7 +67,17 @@ to add or remove just that one day.
 
 In the timeline card, click a track's icon to show its schedule's name (also
 available as a hover tooltip on desktop); a track's bar is drawn solid when
-that block is the one currently active, dimmed otherwise.
+that block is the one currently active, dimmed otherwise. Use the arrows
+either side of the date to preview other days — the "now" line and active
+highlighting only make sense for today, so they're hidden on any other day
+you step to; click "Today" to jump back.
+
+All "is this active right now" and "what day is today" logic (in both
+cards) is computed against Home Assistant's own configured server
+timezone (Settings → System → General), not the browser's — schedule
+blocks are evaluated server-side in that zone, so a viewer in a different
+timezone than the server still sees the correct state rather than a
+locally-shifted one.
 
 ## Controlling entities from a schedule
 

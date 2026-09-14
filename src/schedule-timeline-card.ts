@@ -3,9 +3,15 @@ import { customElement, property, state } from "lit/decorators.js";
 import { CardConfig, HomeAssistant, ScheduleRecord, Weekday } from "./types";
 import { daysOf, errorMessage, listSchedules } from "./schedule-api";
 import { getColors, DEFAULT_COLOR } from "./user-data-api";
-import { currentMinutesOfDay, percentOfDay, toMinutes } from "./time-utils";
+import {
+  addDaysToWeekday,
+  currentMinutesInZone,
+  dateLabelForOffset,
+  percentOfDay,
+  todayWeekdayInZone,
+  toMinutes,
+} from "./time-utils";
 
-const JS_DAY_TO_WEEKDAY: Weekday[] = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 const WEEKDAY_FULL_LABEL: Record<Weekday, string> = {
   monday: "Monday",
   tuesday: "Tuesday",
@@ -22,19 +28,22 @@ function formatHourLabel(hour: number): string {
   return `${h12}${hour < 12 ? "am" : "pm"}`;
 }
 
-function formatTimeLabel(date: Date): string {
-  let h = date.getHours();
-  const m = date.getMinutes();
-  const suffix = h < 12 ? "AM" : "PM";
-  h = h % 12 === 0 ? 12 : h % 12;
-  return `${h}:${String(m).padStart(2, "0")} ${suffix}`;
+function formatTimeLabel(date: Date, timeZone: string | undefined): string {
+  const zone = timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: zone,
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).format(date);
 }
 
 /**
  * A read-only, at-a-glance companion to schedule-editor-card: one track per
- * schedule, today's blocks only, a shared "now" line moving across all of
- * them together. Deliberately does not duplicate the editor card's CRUD -
- * click a track's icon for the name, that's it; edit from the other card.
+ * schedule, a shared "now" line moving across all of them together on
+ * today's view, and arrows to step through other days to see what's coming
+ * up. Deliberately does not duplicate the editor card's CRUD - click a
+ * track's icon for the name, that's it; edit from the other card.
  */
 @customElement("schedule-timeline-card")
 export class ScheduleTimelineCard extends LitElement {
@@ -45,9 +54,16 @@ export class ScheduleTimelineCard extends LitElement {
   @state() private loading = true;
   @state() private error: string | null = null;
   @state() private activeTooltip: string | null = null;
+  /** 0 = today, 1 = tomorrow, -1 = yesterday, etc. Purely a display
+   * choice - navigating never changes any schedule data. */
+  @state() private dayOffset = 0;
 
   private nowTimer?: number;
-  private todayWeekday: Weekday = JS_DAY_TO_WEEKDAY[new Date().getDay()];
+  // Placeholder until connectedCallback can consult hass.config.time_zone;
+  // todayWeekdayInZone/currentMinutesInZone fall back to the browser's own
+  // zone if hass isn't ready yet, so this is never actually wrong, just
+  // momentarily using the fallback rather than the server's real zone.
+  private actualTodayWeekday: Weekday = "monday";
 
   setConfig(config: CardConfig): void {
     this.config = { type: config.type, title: config.title, entities: config.entities };
@@ -60,8 +76,9 @@ export class ScheduleTimelineCard extends LitElement {
   connectedCallback(): void {
     super.connectedCallback();
     this.refresh();
+    this.actualTodayWeekday = todayWeekdayInZone(this.hass?.config?.time_zone);
     this.nowTimer = window.setInterval(() => {
-      this.todayWeekday = JS_DAY_TO_WEEKDAY[new Date().getDay()];
+      this.actualTodayWeekday = todayWeekdayInZone(this.hass?.config?.time_zone);
       this.requestUpdate();
     }, 60_000);
   }
@@ -94,18 +111,45 @@ export class ScheduleTimelineCard extends LitElement {
     this.activeTooltip = this.activeTooltip === scheduleId ? null : scheduleId;
   }
 
+  private changeDay(delta: number): void {
+    this.dayOffset += delta;
+  }
+
+  private goToday(): void {
+    this.dayOffset = 0;
+  }
+
+  private dateLabel(): string {
+    const dateText = dateLabelForOffset(this.hass?.config?.time_zone, this.dayOffset);
+    if (this.dayOffset === 0) return `Today · ${dateText}`;
+    if (this.dayOffset === 1) return `Tomorrow · ${dateText}`;
+    if (this.dayOffset === -1) return `Yesterday · ${dateText}`;
+    const viewedWeekday = addDaysToWeekday(this.actualTodayWeekday, this.dayOffset);
+    return `${WEEKDAY_FULL_LABEL[viewedWeekday]} · ${dateText}`;
+  }
+
   render(): TemplateResult {
     if (this.loading) {
       return html`<ha-card><div class="pad">Loading timeline…</div></ha-card>`;
     }
-    const now = new Date();
-    const nowPct = (currentMinutesOfDay() / 1440) * 100;
+    const isToday = this.dayOffset === 0;
+    const viewedWeekday = addDaysToWeekday(this.actualTodayWeekday, this.dayOffset);
+    const nowPct = isToday ? (currentMinutesInZone(this.hass?.config?.time_zone) / 1440) * 100 : null;
     return html`
       <ha-card>
         <div class="header">
           <div class="title-group">
             <div class="title">${this.config.title ?? "Timeline"}</div>
-            <div class="subtitle">Today · ${WEEKDAY_FULL_LABEL[this.todayWeekday]}</div>
+            <div class="subtitle">
+              <ha-icon-button title="Previous day" @click=${() => this.changeDay(-1)}>
+                <ha-icon icon="mdi:chevron-left"></ha-icon>
+              </ha-icon-button>
+              <span class="date-label">${this.dateLabel()}</span>
+              <ha-icon-button title="Next day" @click=${() => this.changeDay(1)}>
+                <ha-icon icon="mdi:chevron-right"></ha-icon>
+              </ha-icon-button>
+              ${!isToday ? html`<button class="today-link" @click=${() => this.goToday()}>Today</button>` : nothing}
+            </div>
           </div>
         </div>
         ${this.error ? html`<div class="error">${this.error}</div>` : nothing}
@@ -123,11 +167,17 @@ export class ScheduleTimelineCard extends LitElement {
                     `
                   )}
                 </div>
-                ${this.schedules.map((record) => this.renderTrack(record))}
+                ${this.schedules.map((record) => this.renderTrack(record, viewedWeekday, isToday))}
                 <div class="overlay">
                   ${HOURS.map((h) => html`<div class="grid-line" style="left:${(h / 24) * 100}%"></div>`)}
-                  <div class="now-line" style="left:${nowPct}%"></div>
-                  <div class="now-label" style="left:${nowPct}%">${formatTimeLabel(now)}</div>
+                  ${nowPct !== null
+                    ? html`
+                        <div class="now-line" style="left:${nowPct}%"></div>
+                        <div class="now-label" style="left:${nowPct}%">
+                          ${formatTimeLabel(new Date(), this.hass?.config?.time_zone)}
+                        </div>
+                      `
+                    : nothing}
                 </div>
               </div>
             `}
@@ -135,10 +185,10 @@ export class ScheduleTimelineCard extends LitElement {
     `;
   }
 
-  private renderTrack(record: ScheduleRecord): TemplateResult {
-    const blocks = daysOf(record)[this.todayWeekday];
+  private renderTrack(record: ScheduleRecord, weekday: Weekday, isToday: boolean): TemplateResult {
+    const blocks = daysOf(record)[weekday];
     const color = this.colorOf(record.id);
-    const nowMin = currentMinutesOfDay();
+    const nowMin = isToday ? currentMinutesInZone(this.hass?.config?.time_zone) : null;
     return html`
       <button class="track-icon" title=${record.name} @click=${() => this.toggleTooltip(record.id)}>
         <ha-icon icon=${record.icon || "mdi:calendar-clock"}></ha-icon>
@@ -146,7 +196,7 @@ export class ScheduleTimelineCard extends LitElement {
       <div class="track-timeline">
         ${this.activeTooltip === record.id ? html`<div class="tooltip">${record.name}</div>` : nothing}
         ${blocks.map((b) => {
-          const active = toMinutes(b.from) <= nowMin && nowMin < toMinutes(b.to);
+          const active = nowMin !== null && toMinutes(b.from) <= nowMin && nowMin < toMinutes(b.to);
           return html`
             <div
               class="track-block ${active ? "active" : ""}"
@@ -170,8 +220,27 @@ export class ScheduleTimelineCard extends LitElement {
       font-weight: 500;
     }
     .subtitle {
+      display: flex;
+      align-items: center;
+      gap: 2px;
       font-size: 0.8em;
       color: var(--secondary-text-color);
+    }
+    .subtitle ha-icon-button {
+      --mdc-icon-button-size: 28px;
+      --mdc-icon-size: 18px;
+    }
+    .date-label {
+      min-width: 12em;
+      text-align: center;
+    }
+    .today-link {
+      border: none;
+      background: none;
+      color: var(--primary-color, #03a9f4);
+      cursor: pointer;
+      font-size: 1em;
+      padding: 2px 6px;
     }
     .pad {
       padding: 16px;
@@ -282,7 +351,9 @@ export class ScheduleTimelineCard extends LitElement {
       opacity: 0.6;
     }
     /* Shared playhead across every track, same visual language as the
-     * editor card's now-indicator (a line, not a block) for consistency. */
+     * editor card's now-indicator (a line, not a block) for consistency.
+     * Only rendered when viewing today - "now" has no meaning on another
+     * day's preview. */
     .now-line {
       position: absolute;
       top: 0;
@@ -315,5 +386,5 @@ window.customCards = window.customCards || [];
 window.customCards.push({
   type: "schedule-timeline-card",
   name: "Schedule Timeline Card",
-  description: "A live, multi-track timeline overview of your schedules for today.",
+  description: "A live, multi-track timeline overview of your schedules, with day navigation.",
 });
