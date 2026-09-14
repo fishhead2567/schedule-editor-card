@@ -1,7 +1,7 @@
 import { LitElement, html, css, TemplateResult, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import { AutomationBinding, CardConfig, HomeAssistant, ScheduleBlock, ScheduleRecord, WEEKDAYS, Weekday } from "./types";
-import { createSchedule, daysOf, deleteSchedule, errorMessage, listSchedules, updateSchedule, emptyDays } from "./schedule-api";
+import { AutomationBinding, CardConfig, GroupedBlock, HomeAssistant, ScheduleDays, ScheduleRecord, WEEKDAYS, Weekday } from "./types";
+import { createSchedule, daysOf, deleteSchedule, errorMessage, groupedBlocks, listSchedules, updateSchedule, emptyDays } from "./schedule-api";
 import { deleteBinding, getBinding, saveBinding } from "./automation-api";
 import { DEFAULT_COLOR, getColors, setColor } from "./user-data-api";
 import { currentMinutesOfDay, hasOverlap, percentOfDay, toMinutes } from "./time-utils";
@@ -16,19 +16,27 @@ const DAY_LABEL: Record<Weekday, string> = {
   sunday: "Sun",
 };
 
+const DAY_PILL_LABEL: Record<Weekday, string> = {
+  monday: "Mo",
+  tuesday: "Tu",
+  wednesday: "We",
+  thursday: "Th",
+  friday: "Fr",
+  saturday: "Sa",
+  sunday: "Su",
+};
+
 // getDay() is 0=Sunday..6=Saturday; WEEKDAYS is Monday-first.
 const JS_DAY_TO_WEEKDAY: Weekday[] = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 
-interface NewBlockDraft {
-  day: Weekday;
+interface NewGroupDraft {
   from: string;
   to: string;
+  days: Set<Weekday>;
 }
 
-interface FlatBlock {
-  day: Weekday;
-  index: number;
-  block: ScheduleBlock;
+function blockKey(from: string, to: string): string {
+  return `${from}|${to}`;
 }
 
 @customElement("schedule-editor-card")
@@ -39,9 +47,9 @@ export class ScheduleEditorCard extends LitElement {
   @state() private loading = true;
   @state() private error: string | null = null;
   @state() private expandedTimelines: Set<string> = new Set();
-  @state() private editingBlock: { scheduleId: string; day: Weekday; index: number } | null = null;
+  @state() private editingGroup: { scheduleId: string; key: string } | null = null;
   @state() private editBlockDraft: { from: string; to: string } = { from: "00:00", to: "00:30" };
-  @state() private newBlockDrafts: Record<string, NewBlockDraft> = {};
+  @state() private newGroupDrafts: Record<string, NewGroupDraft> = {};
   @state() private expandedBindings: Set<string> = new Set();
   // undefined = not fetched yet, null = fetched, no binding exists.
   @state() private bindings: Record<string, AutomationBinding | null | undefined> = {};
@@ -124,24 +132,23 @@ export class ScheduleEditorCard extends LitElement {
     return this.hass?.states?.[this.entityIdFor(scheduleId)]?.state;
   }
 
-  private flatBlocks(record: ScheduleRecord): FlatBlock[] {
-    const days = daysOf(record);
-    const out: FlatBlock[] = [];
-    for (const day of WEEKDAYS) {
-      days[day].forEach((block, index) => out.push({ day, index, block }));
-    }
-    return out;
+  private draftFor(scheduleId: string): NewGroupDraft {
+    return this.newGroupDrafts[scheduleId] ?? { from: "00:00", to: "00:30", days: new Set() };
   }
 
-  private draftFor(scheduleId: string): NewBlockDraft {
-    return this.newBlockDrafts[scheduleId] ?? { day: this.todayWeekday, from: "00:00", to: "00:30" };
-  }
-
-  private updateDraft(scheduleId: string, patch: Partial<NewBlockDraft>): void {
-    this.newBlockDrafts = {
-      ...this.newBlockDrafts,
+  private updateDraftTime(scheduleId: string, patch: Partial<Pick<NewGroupDraft, "from" | "to">>): void {
+    this.newGroupDrafts = {
+      ...this.newGroupDrafts,
       [scheduleId]: { ...this.draftFor(scheduleId), ...patch },
     };
+  }
+
+  private toggleDraftDay(scheduleId: string, day: Weekday): void {
+    const current = this.draftFor(scheduleId);
+    const nextDays = new Set(current.days);
+    if (nextDays.has(day)) nextDays.delete(day);
+    else nextDays.add(day);
+    this.newGroupDrafts = { ...this.newGroupDrafts, [scheduleId]: { ...current, days: nextDays } };
   }
 
   private toggleTimeline(scheduleId: string): void {
@@ -250,9 +257,7 @@ export class ScheduleEditorCard extends LitElement {
     }
   }
 
-  private async persistDays(record: ScheduleRecord, day: Weekday, blocks: ScheduleBlock[]): Promise<void> {
-    const days = daysOf(record);
-    days[day] = blocks;
+  private async persistAllDays(record: ScheduleRecord, days: ScheduleDays): Promise<void> {
     try {
       const updated = await updateSchedule(this.hass, record.id, record.name, record.icon, days);
       this.schedules = this.schedules.map((s) => (s.id === record.id ? updated : s));
@@ -261,36 +266,67 @@ export class ScheduleEditorCard extends LitElement {
     }
   }
 
-  private handleStartEditBlock(scheduleId: string, day: Weekday, index: number, block: ScheduleBlock): void {
-    this.editingBlock = { scheduleId, day, index };
-    this.editBlockDraft = { from: block.from.slice(0, 5), to: block.to.slice(0, 5) };
+  private handleStartEditGroup(record: ScheduleRecord, group: GroupedBlock): void {
+    this.editingGroup = { scheduleId: record.id, key: blockKey(group.from, group.to) };
+    this.editBlockDraft = { from: group.from.slice(0, 5), to: group.to.slice(0, 5) };
   }
 
-  private handleCancelEditBlock(): void {
-    this.editingBlock = null;
+  private handleCancelEditGroup(): void {
+    this.editingGroup = null;
   }
 
-  private async handleSaveEditBlock(record: ScheduleRecord): Promise<void> {
-    if (!this.editingBlock || this.editingBlock.scheduleId !== record.id) return;
-    const { day, index } = this.editingBlock;
+  /** Editing a group's time changes it for every day currently in that
+   * group, in one combined write - not one write per day. */
+  private async handleSaveEditGroup(record: ScheduleRecord, group: GroupedBlock): Promise<void> {
     const from = `${this.editBlockDraft.from}:00`;
     const to = `${this.editBlockDraft.to}:00`;
     if (toMinutes(from) >= toMinutes(to)) {
       this.error = "Start time must be before end time.";
       return;
     }
-    const existing = daysOf(record)[day];
-    const candidate = existing.map((b, i) => (i === index ? { from, to } : b));
-    if (hasOverlap(candidate)) {
-      this.error = "That block overlaps an existing one on this day.";
-      return;
+    const newDays = daysOf(record);
+    for (const day of group.days) {
+      const withoutOld = newDays[day].filter((b) => blockKey(b.from, b.to) !== blockKey(group.from, group.to));
+      const candidate = [...withoutOld, { from, to }];
+      if (hasOverlap(candidate)) {
+        this.error = `That time overlaps an existing block on ${DAY_LABEL[day]}.`;
+        return;
+      }
+      newDays[day] = candidate;
     }
     this.error = null;
-    this.editingBlock = null;
-    await this.persistDays(record, day, candidate);
+    this.editingGroup = null;
+    await this.persistAllDays(record, newDays);
   }
 
-  private async handleAddBlock(record: ScheduleRecord): Promise<void> {
+  private async handleDeleteGroup(record: ScheduleRecord, group: GroupedBlock): Promise<void> {
+    const newDays = daysOf(record);
+    for (const day of group.days) {
+      newDays[day] = newDays[day].filter((b) => blockKey(b.from, b.to) !== blockKey(group.from, group.to));
+    }
+    await this.persistAllDays(record, newDays);
+  }
+
+  /** Toggling a day pill only ever touches that one day's array. */
+  private async handleToggleGroupDay(record: ScheduleRecord, group: GroupedBlock, day: Weekday): Promise<void> {
+    const days = daysOf(record);
+    const alreadyIncluded = group.days.includes(day);
+    let nextForDay;
+    if (alreadyIncluded) {
+      nextForDay = days[day].filter((b) => blockKey(b.from, b.to) !== blockKey(group.from, group.to));
+    } else {
+      nextForDay = [...days[day], { from: group.from, to: group.to }];
+      if (hasOverlap(nextForDay)) {
+        this.error = `That time overlaps an existing block on ${DAY_LABEL[day]}.`;
+        return;
+      }
+    }
+    this.error = null;
+    const newDays = { ...days, [day]: nextForDay };
+    await this.persistAllDays(record, newDays);
+  }
+
+  private async handleAddGroup(record: ScheduleRecord): Promise<void> {
     const draft = this.draftFor(record.id);
     const from = `${draft.from}:00`;
     const to = `${draft.to}:00`;
@@ -298,21 +334,22 @@ export class ScheduleEditorCard extends LitElement {
       this.error = "Start time must be before end time.";
       return;
     }
-    const existing = daysOf(record)[draft.day];
-    const candidate = [...existing, { from, to }];
-    if (hasOverlap(candidate)) {
-      this.error = "That block overlaps an existing one on that day.";
+    if (draft.days.size === 0) {
+      this.error = "Pick at least one day.";
       return;
     }
+    const newDays = daysOf(record);
+    for (const day of draft.days) {
+      const candidate = [...newDays[day], { from, to }];
+      if (hasOverlap(candidate)) {
+        this.error = `That time overlaps an existing block on ${DAY_LABEL[day]}.`;
+        return;
+      }
+      newDays[day] = candidate;
+    }
     this.error = null;
-    this.updateDraft(record.id, { from: "00:00", to: "00:30" });
-    await this.persistDays(record, draft.day, candidate);
-  }
-
-  private async handleRemoveBlock(record: ScheduleRecord, day: Weekday, index: number): Promise<void> {
-    const existing = daysOf(record)[day];
-    const next = existing.filter((_, i) => i !== index);
-    await this.persistDays(record, day, next);
+    this.newGroupDrafts = { ...this.newGroupDrafts, [record.id]: { from: "00:00", to: "00:30", days: new Set() } };
+    await this.persistAllDays(record, newDays);
   }
 
   render(): TemplateResult {
@@ -337,7 +374,7 @@ export class ScheduleEditorCard extends LitElement {
     const isOn = this.stateOf(record.id) === "on";
     const expanded = this.expandedTimelines.has(record.id);
     const bindingsOpen = this.expandedBindings.has(record.id);
-    const blocks = this.flatBlocks(record);
+    const groups = groupedBlocks(record);
     const binding = this.bindings[record.id];
     const boundCount = binding?.entities.length ?? 0;
     return html`
@@ -385,10 +422,10 @@ export class ScheduleEditorCard extends LitElement {
         ${bindingsOpen ? this.renderBindingPanel(record) : nothing}
 
         <div class="block-list">
-          ${blocks.length === 0
+          ${groups.length === 0
             ? html`<div class="muted">No blocks yet.</div>`
-            : blocks.map((fb) => this.renderBlockChip(record, fb))}
-          ${this.renderAddBlockForm(record)}
+            : groups.map((g) => this.renderGroupChip(record, g))}
+          ${this.renderAddGroupForm(record)}
         </div>
 
         ${expanded
@@ -446,17 +483,37 @@ export class ScheduleEditorCard extends LitElement {
     `;
   }
 
-  private renderBlockChip(record: ScheduleRecord, fb: FlatBlock): TemplateResult {
-    const { day, index, block } = fb;
+  private renderDayPills(
+    activeDays: Weekday[],
+    onToggle: (day: Weekday) => void
+  ): TemplateResult {
+    return html`
+      <div class="day-pills">
+        ${WEEKDAYS.map(
+          (d) => html`
+            <button
+              class="day-pill ${activeDays.includes(d) ? "on" : ""}"
+              title=${DAY_LABEL[d]}
+              @click=${() => onToggle(d)}
+            >
+              ${DAY_PILL_LABEL[d]}
+            </button>
+          `
+        )}
+      </div>
+    `;
+  }
+
+  private renderGroupChip(record: ScheduleRecord, group: GroupedBlock): TemplateResult {
     const isEditing =
-      this.editingBlock?.scheduleId === record.id &&
-      this.editingBlock?.day === day &&
-      this.editingBlock?.index === index;
+      this.editingGroup?.scheduleId === record.id &&
+      this.editingGroup?.key === blockKey(group.from, group.to);
+
+    const pills = this.renderDayPills(group.days, (day) => this.handleToggleGroupDay(record, group, day));
 
     if (isEditing) {
       return html`
         <div class="block-chip editing">
-          <span class="chip-day">${DAY_LABEL[day]}</span>
           <input
             type="time"
             .value=${this.editBlockDraft.from}
@@ -470,49 +527,41 @@ export class ScheduleEditorCard extends LitElement {
             @change=${(e: Event) =>
               (this.editBlockDraft = { ...this.editBlockDraft, to: (e.target as HTMLInputElement).value })}
           />
-          <button title="Save" @click=${() => this.handleSaveEditBlock(record)}>✓</button>
-          <button title="Cancel" @click=${() => this.handleCancelEditBlock()}>×</button>
+          <button title="Save" @click=${() => this.handleSaveEditGroup(record, group)}>✓</button>
+          <button title="Cancel" @click=${() => this.handleCancelEditGroup()}>×</button>
+          ${pills}
         </div>
       `;
     }
 
     return html`
       <div class="block-chip">
-        <button
-          class="chip-text"
-          title="Click to edit"
-          @click=${() => this.handleStartEditBlock(record.id, day, index, block)}
-        >
-          <span class="chip-day">${DAY_LABEL[day]}</span>
-          ${block.from.slice(0, 5)}–${block.to.slice(0, 5)}
+        <button class="chip-text" title="Click to edit time" @click=${() => this.handleStartEditGroup(record, group)}>
+          ${group.from.slice(0, 5)}–${group.to.slice(0, 5)}
         </button>
-        <button title="Delete" @click=${() => this.handleRemoveBlock(record, day, index)}>×</button>
+        ${pills}
+        <button title="Delete" @click=${() => this.handleDeleteGroup(record, group)}>×</button>
       </div>
     `;
   }
 
-  private renderAddBlockForm(record: ScheduleRecord): TemplateResult {
+  private renderAddGroupForm(record: ScheduleRecord): TemplateResult {
     const draft = this.draftFor(record.id);
     return html`
       <div class="add-block">
-        <select
-          .value=${draft.day}
-          @change=${(e: Event) => this.updateDraft(record.id, { day: (e.target as HTMLSelectElement).value as Weekday })}
-        >
-          ${WEEKDAYS.map((d) => html`<option value=${d} ?selected=${d === draft.day}>${DAY_LABEL[d]}</option>`)}
-        </select>
         <input
           type="time"
           .value=${draft.from}
-          @change=${(e: Event) => this.updateDraft(record.id, { from: (e.target as HTMLInputElement).value })}
+          @change=${(e: Event) => this.updateDraftTime(record.id, { from: (e.target as HTMLInputElement).value })}
         />
         <span>to</span>
         <input
           type="time"
           .value=${draft.to}
-          @change=${(e: Event) => this.updateDraft(record.id, { to: (e.target as HTMLInputElement).value })}
+          @change=${(e: Event) => this.updateDraftTime(record.id, { to: (e.target as HTMLInputElement).value })}
         />
-        <mwc-button @click=${() => this.handleAddBlock(record)}>+ Add</mwc-button>
+        ${this.renderDayPills([...draft.days], (day) => this.toggleDraftDay(record.id, day))}
+        <mwc-button @click=${() => this.handleAddGroup(record)}>+ Add</mwc-button>
       </div>
     `;
   }
@@ -677,11 +726,6 @@ export class ScheduleEditorCard extends LitElement {
       padding: 2px 4px 2px 4px;
       font-size: 0.85em;
     }
-    .chip-day {
-      font-weight: 500;
-      color: var(--secondary-text-color);
-      margin-right: 4px;
-    }
     .chip-text {
       border: none;
       background: none;
@@ -704,6 +748,27 @@ export class ScheduleEditorCard extends LitElement {
     }
     .block-chip.editing input[type="time"] {
       font-size: 0.85em;
+    }
+    .day-pills {
+      display: flex;
+      gap: 2px;
+    }
+    .day-pill {
+      border: 1px solid var(--divider-color);
+      background: none;
+      color: var(--secondary-text-color);
+      border-radius: 4px;
+      width: 22px;
+      height: 22px;
+      font-size: 0.68em;
+      line-height: 1;
+      cursor: pointer;
+      padding: 0;
+    }
+    .day-pill.on {
+      background: var(--state-active-color, #2196f3);
+      border-color: var(--state-active-color, #2196f3);
+      color: white;
     }
     .add-block {
       display: flex;

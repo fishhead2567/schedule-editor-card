@@ -59,6 +59,12 @@ the frontend itself uses for things like dashboard state), not
 `localStorage`, so they follow your account across devices/browsers rather
 than being stuck to one.
 
+Each block is shown as *one row per time range*, not one per day — "time is
+the unit, days are a property of it," e.g. one `08:00–08:20` row with day
+pills for Mo/Tu/We/Th/Fr/Sa/Su, rather than seven identical rows. Click the
+time to edit it (applies to every day currently checked); click a day pill
+to add or remove just that one day.
+
 In the timeline card, click a track's icon to show its schedule's name (also
 available as a hover tooltip on desktop); a track's bar is drawn solid when
 that block is the one currently active, dimmed otherwise.

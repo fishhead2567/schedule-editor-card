@@ -600,6 +600,79 @@ guessing:**
   every day" and collapse it to a single "Daily" chip instead of 7
   identical ones - not attempted yet, pending the user's read on it.
 
+### Milestone 7 — Timeline labels + the "time is the unit, days are a property" editor rework (done, 2026-09-14)
+
+Direct response to the scaling finding above, plus timeline usability
+feedback, both from the same review session.
+
+**Editor rework - the actual fix for Milestone 6's finding:** the user
+proposed inverting the model: instead of "day is unique, times repeat"
+(a block belongs to one day's array; the same time on 7 days is 7 separate
+things to look at), treat the *time range* as the unit and days as a
+property of it - "08:00-08:20, M/T/W/Th/F/Sa/Su" as one entry, not seven.
+
+This is a display/editing reinterpretation only - **the native storage
+format did not change** (still per-day arrays, `schedule/update` still
+takes all seven). What changed is `groupedBlocks()` (`schedule-api.ts`,
+unit-tested standalone before touching any UI): it regroups a schedule's
+per-day arrays by exact `{from, to}` identity into `{from, to, days[]}`
+entries. Two blocks merge into one group *only* on an exact match - a
+block one minute off on one day is correctly kept as its own group, not
+folded in as a rendering quirk.
+
+The card now renders one row per group: click the time text to edit it
+(applies to every day currently in that group, one combined write, not
+one per day); click a day pill to add/remove that single day from the
+group (touches only that one day's array); a matching "add new block"
+form takes a time range plus day-pill checkboxes instead of a single day
+dropdown, writing the new block to every checked day in one combined
+update, rejecting the whole thing if *any* checked day would overlap
+(all-or-nothing, not partial).
+
+**Concrete effect, same fixture set used for Milestone 6's finding:**
+"Security Lighting 00:00-04:00" (identical block on all 7 days) now
+renders as **one chip**, not seven. "New Sod Watering" (2 distinct times
+across 4 days each) is **2 chips**, not 8.
+
+Verified live, both directions, not just the render: toggled a day pill
+off on an existing group (removed Saturday from "Near Midnight Block"),
+confirmed via `schedule/list` that only Saturday's array changed; added a
+new group via the actual add-form with two days checked (Monday and
+Wednesday), confirmed both days' arrays got the identical new block in a
+single write.
+
+**Timeline card labeling**, the other half of this round's feedback -
+"is it a day view? it should indicate that," hour gridlines, a label for
+what the now-line means:
+- Header now shows a subtitle, "Today · `<Weekday>`" - answers "is this a
+  day view" directly rather than leaving it implicit.
+- An hour axis row (12am/3am/6am/.../9pm, every 3 hours) plus dotted
+  gridlines at every hour, spanning down through every track.
+- A small red time label ("4:35 PM") floating above the now-line itself.
+- **Alignment implementation note:** the axis, the gridline/now-line
+  overlay, and every track's bars all had to land in the exact same
+  horizontal pixel range. Approximating this with matching padding on
+  separate flex rows (the original approach that would have been used)
+  is fragile - instead the whole chart is one CSS Grid
+  (`grid-template-columns: 32px 1fr`), and the overlay is a single
+  absolutely-positioned grid item placed with `grid-column: 2; grid-row:
+  1 / -1`, spanning that same bar-column across every row including the
+  axis. This is exact by construction rather than approximated, and is a
+  legitimately different (better) approach than the per-track now-line
+  the editor card still uses for its own (single-schedule, no shared axis
+  needed) weekly view - not a candidate to backport there, different
+  problem shape.
+- **A real bug caught by checking computed styles, not just eyeballing a
+  screenshot:** the first attempt colored gridlines with `--divider-color`
+  - the exact same token the track bars themselves use as their
+  background - making them invisible on top of any bar. A screenshot at
+  normal compression didn't make this obvious either way, so this was
+  confirmed by reading the actual computed `border-left`/`opacity` in the
+  browser rather than trusting how a screenshot looked. Fixed with
+  `--secondary-text-color` at reduced opacity (0.6, bumped once from an
+  initial 0.4 for safety margin), which contrasts against both the bars
+  and the gaps between them.
+
 ## Testing strategy
 
 Matches how HACS frontend cards are actually tested in practice (there is

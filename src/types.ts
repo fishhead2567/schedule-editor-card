@@ -23,6 +23,20 @@ export interface ScheduleRecord extends ScheduleDays {
   icon?: string;
 }
 
+/**
+ * A schedule's blocks, regrouped: rather than "day is unique, times repeat"
+ * (the native storage shape - a block belongs to a day's array), this is
+ * "time range is the unit, days are a property of it" - one entry per
+ * distinct {from, to} pair, listing which days currently have that exact
+ * block. Purely a display/editing convenience computed from the native
+ * per-day arrays; the underlying storage format is unchanged.
+ */
+export interface GroupedBlock {
+  from: string;
+  to: string;
+  days: Weekday[];
+}
+
 export interface CardConfig {
   type: string;
   title?: string;

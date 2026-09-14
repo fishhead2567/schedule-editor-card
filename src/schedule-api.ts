@@ -1,4 +1,4 @@
-import { HomeAssistant, ScheduleDays, ScheduleRecord, WEEKDAYS } from "./types";
+import { GroupedBlock, HomeAssistant, ScheduleDays, ScheduleRecord, WEEKDAYS } from "./types";
 
 /**
  * Neither of HA's two error shapes this card runs into are Error instances:
@@ -76,4 +76,28 @@ export function daysOf(record: ScheduleRecord): ScheduleDays {
     out[day] = record[day] ?? [];
   }
   return out;
+}
+
+/**
+ * Regroups a schedule's per-day blocks by exact {from, to} identity - see
+ * GroupedBlock in types.ts for why. Two blocks group together only if their
+ * times match exactly; a block that's one minute off on one day is a
+ * separate group, not merged, which is the correct behavior (it really is
+ * a different time range, not a rendering quirk).
+ */
+export function groupedBlocks(record: ScheduleRecord): GroupedBlock[] {
+  const days = daysOf(record);
+  const byKey = new Map<string, GroupedBlock>();
+  for (const day of WEEKDAYS) {
+    for (const block of days[day]) {
+      const key = `${block.from}|${block.to}`;
+      const existing = byKey.get(key);
+      if (existing) {
+        existing.days.push(day);
+      } else {
+        byKey.set(key, { from: block.from, to: block.to, days: [day] });
+      }
+    }
+  }
+  return [...byKey.values()].sort((a, b) => a.from.localeCompare(b.from));
 }

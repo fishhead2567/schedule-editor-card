@@ -6,6 +6,29 @@ import { getColors, DEFAULT_COLOR } from "./user-data-api";
 import { currentMinutesOfDay, percentOfDay, toMinutes } from "./time-utils";
 
 const JS_DAY_TO_WEEKDAY: Weekday[] = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+const WEEKDAY_FULL_LABEL: Record<Weekday, string> = {
+  monday: "Monday",
+  tuesday: "Tuesday",
+  wednesday: "Wednesday",
+  thursday: "Thursday",
+  friday: "Friday",
+  saturday: "Saturday",
+  sunday: "Sunday",
+};
+const HOURS = Array.from({ length: 24 }, (_, h) => h);
+
+function formatHourLabel(hour: number): string {
+  const h12 = hour % 12 === 0 ? 12 : hour % 12;
+  return `${h12}${hour < 12 ? "am" : "pm"}`;
+}
+
+function formatTimeLabel(date: Date): string {
+  let h = date.getHours();
+  const m = date.getMinutes();
+  const suffix = h < 12 ? "AM" : "PM";
+  h = h % 12 === 0 ? 12 : h % 12;
+  return `${h}:${String(m).padStart(2, "0")} ${suffix}`;
+}
 
 /**
  * A read-only, at-a-glance companion to schedule-editor-card: one track per
@@ -31,7 +54,7 @@ export class ScheduleTimelineCard extends LitElement {
   }
 
   getCardSize(): number {
-    return 2 + this.schedules.length;
+    return 3 + this.schedules.length;
   }
 
   connectedCallback(): void {
@@ -75,19 +98,37 @@ export class ScheduleTimelineCard extends LitElement {
     if (this.loading) {
       return html`<ha-card><div class="pad">Loading timeline…</div></ha-card>`;
     }
+    const now = new Date();
     const nowPct = (currentMinutesOfDay() / 1440) * 100;
     return html`
       <ha-card>
         <div class="header">
-          <div class="title">${this.config.title ?? "Timeline"}</div>
+          <div class="title-group">
+            <div class="title">${this.config.title ?? "Timeline"}</div>
+            <div class="subtitle">Today · ${WEEKDAY_FULL_LABEL[this.todayWeekday]}</div>
+          </div>
         </div>
         ${this.error ? html`<div class="error">${this.error}</div>` : nothing}
         ${this.schedules.length === 0
           ? html`<div class="pad">No schedules yet.</div>`
           : html`
-              <div class="tracks">
+              <div class="chart">
+                <div class="axis-spacer"></div>
+                <div class="axis-bar">
+                  ${HOURS.map(
+                    (h) => html`
+                      <div class="hour-tick" style="left:${(h / 24) * 100}%">
+                        ${h % 3 === 0 ? html`<span class="hour-label">${formatHourLabel(h)}</span>` : nothing}
+                      </div>
+                    `
+                  )}
+                </div>
                 ${this.schedules.map((record) => this.renderTrack(record))}
-                <div class="now-line" style="left:${nowPct}%"></div>
+                <div class="overlay">
+                  ${HOURS.map((h) => html`<div class="grid-line" style="left:${(h / 24) * 100}%"></div>`)}
+                  <div class="now-line" style="left:${nowPct}%"></div>
+                  <div class="now-label" style="left:${nowPct}%">${formatTimeLabel(now)}</div>
+                </div>
               </div>
             `}
       </ha-card>
@@ -99,27 +140,21 @@ export class ScheduleTimelineCard extends LitElement {
     const color = this.colorOf(record.id);
     const nowMin = currentMinutesOfDay();
     return html`
-      <div class="track">
-        <button
-          class="track-icon"
-          title=${record.name}
-          @click=${() => this.toggleTooltip(record.id)}
-        >
-          <ha-icon icon=${record.icon || "mdi:calendar-clock"}></ha-icon>
-        </button>
+      <button class="track-icon" title=${record.name} @click=${() => this.toggleTooltip(record.id)}>
+        <ha-icon icon=${record.icon || "mdi:calendar-clock"}></ha-icon>
+      </button>
+      <div class="track-timeline">
         ${this.activeTooltip === record.id ? html`<div class="tooltip">${record.name}</div>` : nothing}
-        <div class="track-timeline">
-          ${blocks.map((b) => {
-            const active = toMinutes(b.from) <= nowMin && nowMin < toMinutes(b.to);
-            return html`
-              <div
-                class="track-block ${active ? "active" : ""}"
-                style="left:${percentOfDay(b.from)}%; width:${percentOfDay(b.to) - percentOfDay(b.from)}%; background:${color}"
-                title="${b.from.slice(0, 5)}–${b.to.slice(0, 5)}"
-              ></div>
-            `;
-          })}
-        </div>
+        ${blocks.map((b) => {
+          const active = toMinutes(b.from) <= nowMin && nowMin < toMinutes(b.to);
+          return html`
+            <div
+              class="track-block ${active ? "active" : ""}"
+              style="left:${percentOfDay(b.from)}%; width:${percentOfDay(b.to) - percentOfDay(b.from)}%; background:${color}"
+              title="${b.from.slice(0, 5)}–${b.to.slice(0, 5)}"
+            ></div>
+          `;
+        })}
       </div>
     `;
   }
@@ -133,7 +168,10 @@ export class ScheduleTimelineCard extends LitElement {
     .title {
       font-size: 1.2em;
       font-weight: 500;
-      flex: 1;
+    }
+    .subtitle {
+      font-size: 0.8em;
+      color: var(--secondary-text-color);
     }
     .pad {
       padding: 16px;
@@ -146,32 +184,65 @@ export class ScheduleTimelineCard extends LitElement {
       border-radius: 4px;
       font-size: 0.9em;
     }
-    .tracks {
+    /*
+     * A CSS grid, not flexbox, specifically so the hour axis, the gridline/
+     * now-line overlay, and every track's bar area share the exact same
+     * column - the overlay is an absolutely-positioned grid item placed in
+     * that same column across every row, which guarantees its percentage-
+     * based positions land in the same pixels as the bars underneath it,
+     * rather than approximating the offset with matching padding.
+     */
+    .chart {
       position: relative;
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      padding: 4px 16px 16px;
-    }
-    .track {
-      position: relative;
-      display: flex;
+      display: grid;
+      grid-template-columns: 32px 1fr;
       align-items: center;
-      gap: 8px;
+      row-gap: 6px;
+      padding: 4px 16px 20px;
+    }
+    .axis-spacer {
+      grid-column: 1;
+    }
+    .axis-bar {
+      grid-column: 2;
+      position: relative;
+      height: 16px;
+    }
+    .hour-tick {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+    }
+    .hour-label {
+      position: absolute;
+      top: 0;
+      left: 2px;
+      font-size: 0.68em;
+      color: var(--secondary-text-color);
+      white-space: nowrap;
     }
     .track-icon {
+      grid-column: 1;
       border: none;
       background: none;
       cursor: pointer;
       padding: 4px;
       display: flex;
+      justify-content: center;
       color: var(--secondary-text-color);
-      flex-shrink: 0;
+    }
+    .track-timeline {
+      grid-column: 2;
+      position: relative;
+      height: 18px;
+      background: var(--divider-color);
+      border-radius: 3px;
+      overflow: visible;
     }
     .tooltip {
       position: absolute;
-      left: 32px;
-      top: -2px;
+      left: 0;
+      top: -26px;
       z-index: 2;
       background: var(--card-background-color, white);
       border: 1px solid var(--divider-color);
@@ -180,14 +251,6 @@ export class ScheduleTimelineCard extends LitElement {
       font-size: 0.8em;
       box-shadow: var(--ha-card-box-shadow, 0 2px 4px rgba(0, 0, 0, 0.2));
       white-space: nowrap;
-    }
-    .track-timeline {
-      position: relative;
-      flex: 1;
-      height: 18px;
-      background: var(--divider-color);
-      border-radius: 3px;
-      overflow: hidden;
     }
     .track-block {
       position: absolute;
@@ -200,6 +263,24 @@ export class ScheduleTimelineCard extends LitElement {
       opacity: 1;
       box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15) inset;
     }
+    /* Spans the bar column across every row (axis + all tracks) - see the
+     * .chart comment above for why a grid makes this line up exactly. */
+    .overlay {
+      grid-column: 2;
+      grid-row: 1 / -1;
+      position: relative;
+      pointer-events: none;
+    }
+    .grid-line {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 0;
+      /* Deliberately not --divider-color: the track bars themselves use
+       * that color, which made the gridlines invisible on top of them. */
+      border-left: 1px dotted var(--secondary-text-color);
+      opacity: 0.6;
+    }
     /* Shared playhead across every track, same visual language as the
      * editor card's now-indicator (a line, not a block) for consistency. */
     .now-line {
@@ -208,7 +289,15 @@ export class ScheduleTimelineCard extends LitElement {
       bottom: 0;
       width: 1.5px;
       background: var(--now-line-color, var(--error-color, #ff5252));
-      pointer-events: none;
+    }
+    .now-label {
+      position: absolute;
+      top: -18px;
+      transform: translateX(-50%);
+      font-size: 0.68em;
+      font-weight: 500;
+      color: var(--now-line-color, var(--error-color, #ff5252));
+      white-space: nowrap;
     }
   `;
 }
