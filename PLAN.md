@@ -746,6 +746,72 @@ schedule active only Tue/Thu/Fri/Sun ("New Sod Watering") correctly shows
 no blocks on the actual-today Monday view and correctly shows its two
 blocks after advancing one day to Tuesday.
 
+### Milestone 9 — The now-line and gridlines were actually invisible in real use (done, 2026-09-14)
+
+User report right after Milestone 8 shipped: the red now-*label* text
+showed, but the now-*line* itself didn't, and the hour gridlines didn't
+either. Real regression, confirmed and fixed - and a good example of why
+"I saw it in a screenshot once" isn't the same as verifying a specific
+element actually renders: the earlier verification screenshots almost
+certainly had this exact same bug and it wasn't caught, because attention
+was on the date label and general layout, not on confirming a 1.5px line
+specifically. Checked computed layout this time instead of screenshots
+alone, and found **three separate real bugs stacked on each other**, not
+one - each fix revealed the next:
+
+1. `.overlay`'s computed height was `0px`. `.chart` sets `align-items:
+   center` for its normal cells; `.overlay` inherited that, and since
+   every one of its children is `position: absolute` (no in-flow content
+   to give it height), "center" collapsed it instead of stretching it
+   across its grid-row span. First fix: `align-self: stretch`. Height was
+   *still* `0px` after this alone - one bug fixed, one still hiding.
+2. `grid-row: 1 / -1` (from Milestone 7) never actually worked at any
+   point: `-1` resolves against the *explicit* grid (`grid-template-
+   rows`), which was never declared, so every row was implicit/auto-
+   generated and `-1` didn't mean "the last row that actually exists."
+   Tried fixing this with an explicit, JS-computed span
+   (`grid-row: 1 / span N`) instead - height went from 0px to a real but
+   *wrong, too-small* number (120px for what should have been ~700px+).
+3. Checking `getComputedStyle(chart).gridTemplateRows` explained why:
+   **42 row tracks existed for what should have been 21** - the first 21
+   all `0px`, the next 21 holding the real content. Root cause: once
+   `.overlay` explicitly claimed column 2 across rows 1-21, CSS Grid's
+   auto-placement algorithm won't place an auto-flowed item into a cell
+   an explicitly-placed item already occupies - so every auto-placed
+   column-2 item (the axis bar and all 20 track-timelines) got pushed
+   into a *second*, separate set of 21 implicit rows instead of reusing
+   the first. This is a genuine, if obscure, interaction between explicit
+   line-based placement and auto-placement, not a typo to fix in place.
+
+**Decision: stop fighting it.** Rather than chase a fourth grid-specific
+fix, the overlay was pulled out of the grid entirely - it's now a plain
+`position: absolute` sibling of `.chart` (both wrapped in a new
+`.chart-wrapper`), positioned with fixed pixel insets that mirror
+`.chart`'s own already-fixed constants (the 32px icon column, the
+16/4/20px padding) instead of asking the grid to place it. This trades
+"exact by construction" (the original goal, and worth attempting once)
+for "exact by two numbers matching each other" - a real but much smaller
+cost, and one that's easy to keep in sync since those constants rarely
+change and are commented where both are defined.
+
+**Verified this time by measuring, not by looking:** confirmed via
+`getBoundingClientRect()` that `.overlay`, a real `.track-timeline`, and
+the `.axis-bar` all share identical `left`/`right` pixel values (571/997
+in the test viewport) and that `.overlay.top` matches `.axis-bar.top`
+exactly - genuinely pixel-aligned, not just visually close in a
+screenshot. Only after that measurement passed was a screenshot taken to
+confirm the visual result: the red line and dotted gridlines both now
+run the full height of the chart, through every track.
+
+**Process lesson for this project going forward:** for any layout claim
+about an element actually being visible/sized/positioned correctly,
+check computed layout (`getBoundingClientRect`, `getComputedStyle`)
+*before* trusting a screenshot - a screenshot confirms something painted
+somewhere, not that the specific element under discussion is the thing
+that painted it, at the size or position intended. This bug shipped in
+Milestone 7 specifically because that verification step was skipped in
+favor of "the screenshot looks fine."
+
 ## Testing strategy
 
 Matches how HACS frontend cards are actually tested in practice (there is
