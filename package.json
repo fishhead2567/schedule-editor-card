@@ -1,7 +1,7 @@
 {
   "name": "schedule-editor-card",
-  "version": "0.1.0",
-  "description": "A Lovelace card to create, edit, duplicate and delete Home Assistant's native schedule helper entities.",
+  "version": "0.2.0",
+  "description": "Two Lovelace cards for Home Assistant's native schedule helper entities: an editor (create, edit, duplicate, bind to real entities) and a live multi-track timeline.",
   "license": "MIT",
   "type": "module",
   "scripts": {
