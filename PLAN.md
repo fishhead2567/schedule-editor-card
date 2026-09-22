@@ -216,8 +216,26 @@ Goal: prove the actual HACS distribution path works, not just CI.
       manual check anyone can do themselves whenever they want the final
       "yes, exactly this button works" confirmation; not worth blocking
       further work on.
-- [ ] Only after the user wants to: install on the real HA instance
-      (192.168.1.206) as a custom repository — their call, their login.
+- [x] Install on the real HA instance (192.168.1.206) as a custom
+      repository — the user did this 2026-09-22. First attempt failed:
+      "Repository structure for v0.1.0 is not compliant." Root cause:
+      `v0.1.0` was from 2026-09-11 and predated almost everything since
+      (the second custom element, `local/schedule_sync.yaml`, per-schedule
+      icon/color, entity binding, the grouped-block rework, timeline
+      navigation) - stale relative to current `master`, which the same
+      validation logic (`hacs/action` in CI) had been passing cleanly and
+      continuously the whole time, including a weekly scheduled re-check
+      the day before this was hit. Fixed by cutting `v0.2.0` from current
+      master (bumped `package.json` too) rather than digging further into
+      exactly which structural check `v0.1.0` failed - confirmed CI green
+      first, then tagged, then confirmed the release asset is byte-
+      identical to the local build and contains both custom elements.
+      **Lesson for this project going forward: a tagged release is a
+      snapshot, and "CI passes on master" says nothing about whether an
+      old tag still would** - if substantial work has landed since the
+      last release, assume the tag is stale before assuming there's a
+      deeper problem. Re-attempt on the user's real instance pending as of
+      this writing.
 
 ### Milestone 3 — Polish
 - [x] ~~Edit-in-place for existing blocks~~ — moved to and done under
@@ -811,6 +829,38 @@ somewhere, not that the specific element under discussion is the thing
 that painted it, at the size or position intended. This bug shipped in
 Milestone 7 specifically because that verification step was skipped in
 favor of "the screenshot looks fine."
+
+### Milestone 10 — A week of real, unattended, uninterrupted operation (confirmed 2026-09-22)
+
+Every other verification in this project up to now was a deliberate,
+short-lived test: force a state, fire a trigger, check the result, clean
+up. This is different - the dev instance had been running continuously
+for 8 days (no restart, confirmed via `docker ps` uptime) with a real
+entity binding in place ("New Sod Watering" -> `light.bed_light`, no
+recheck interval, so purely transition/startup-triggered) and nobody
+watching it. The ask was to actually look at what happened.
+
+Pulled 8 days of history for both `light.bed_light` and its controlling
+schedule via `/api/history/period`. Results, computed precisely rather
+than eyeballed:
+- **20/20 transitions matched.** Every on and every off the schedule
+  underwent, the light underwent too - no missed transitions, no extra
+  ones, no drift accumulating over the week.
+- **Correct days only**: the schedule is Tue/Thu/Fri/Sun-only: real
+  transitions landed on Sep 15 (Tue), 17 (Thu), 18 (Fri), 20 (Sun), 22
+  (Tue) and nowhere else in the 8-day window - Mon/Wed/Sat were
+  correctly silent throughout, cross-checked against the actual calendar,
+  not assumed.
+- **Response lag measured, not estimated**: 1.5ms to 29.8ms between the
+  schedule's own state change and the light following it, every single
+  time - consistent with a normal automation-engine reaction, not
+  suggestive of any queuing, delay, or missed-then-caught-up pattern.
+
+This is meaningfully different evidence than anything earlier in the
+project: it wasn't set up as a test and then immediately checked - it
+was left alone for over a week under ordinary operation and only
+inspected after the fact, closer to how the real deployment will actually
+be used than any of the deliberate force-and-check tests were.
 
 ## Testing strategy
 
