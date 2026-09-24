@@ -84,9 +84,16 @@ locally-shifted one.
 A `schedule` entity by itself is just a weekly on/off signal — something
 still has to flip real entities in response. The card manages that for
 you: click the plug icon in a schedule's header to open its **controls**
-panel, pick one or more entities (switch or light domain — group helpers
-work too, since they're just entities in those same domains), and
-optionally set a recheck interval.
+panel, pick a **target** (switch/light entities, devices, areas, or
+labels — group helpers work too, since they're just entities in those
+same domains), and optionally set a recheck interval.
+
+Picking a **label** (Settings → Areas, labels & zones → Labels) is often
+the most useful option: label a handful of lights or the smart-plugs
+behind a few humidifiers once, point a schedule's controls at that label
+instead of listing each entity, and anything tagged with it later —
+including a whole device, not just individually-labeled entities — gets
+picked up automatically without editing the binding again.
 
 Under the hood this creates (and keeps in sync) a small automation built
 from a bundled blueprint, `local/schedule_sync.yaml` — restart-safe (it
@@ -117,6 +124,14 @@ won't run — or will actively shut off if it's already running — while
 it's already too humid, regardless of what the schedule itself says.
 Leave it empty (the default) for a schedule that should just follow its
 own on/off state with no extra condition.
+
+Unlike "Controls" above, this picker is entities-only — it doesn't accept
+labels/devices/areas. That's deliberate, not an oversight: the condition
+check happens in a template, not a service-call target, and a label
+applied to a device or area doesn't resolve down to that device/area's
+entities there the way it does for "Controls" - only entities labeled
+directly would ever match, which would be a confusing, silently-partial
+result rather than a real feature.
 
 You'll need the blueprint itself installed once per Home Assistant
 instance: copy [`local/schedule_sync.yaml`](local/schedule_sync.yaml) into

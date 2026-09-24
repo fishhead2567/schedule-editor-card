@@ -1,7 +1,7 @@
 import { LitElement, html, css, TemplateResult, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import { AutomationBinding, CardConfig, GroupedBlock, HomeAssistant, ScheduleDays, ScheduleRecord, WEEKDAYS, Weekday } from "./types";
-import { createSchedule, daysOf, deleteSchedule, errorMessage, groupedBlocks, listSchedules, scheduleEntitiesFingerprint, updateSchedule, emptyDays } from "./schedule-api";
+import { AutomationBinding, CardConfig, EntityTarget, GroupedBlock, HomeAssistant, ScheduleDays, ScheduleRecord, WEEKDAYS, Weekday } from "./types";
+import { createSchedule, daysOf, deleteSchedule, errorMessage, groupedBlocks, listSchedules, scheduleEntitiesFingerprint, targetCount, updateSchedule, emptyDays } from "./schedule-api";
 import { deleteBinding, getBinding, saveBinding } from "./automation-api";
 import { DEFAULT_COLOR, getColors, setColor } from "./user-data-api";
 import { currentMinutesInZone, hasOverlap, percentOfDay, todayWeekdayInZone, toMinutes } from "./time-utils";
@@ -232,7 +232,7 @@ export class ScheduleEditorCard extends LitElement {
   }
 
   private async handleBindingChange(record: ScheduleRecord, patch: Partial<AutomationBinding>): Promise<void> {
-    const current = this.bindings[record.id] ?? { entities: [], recheckMinutes: 0, conditionEntities: [] };
+    const current = this.bindings[record.id] ?? { entities: { entity_id: [] }, recheckMinutes: 0, conditionEntities: [] };
     const next: AutomationBinding = { ...current, ...patch };
     // Optimistic update so the picker doesn't visually snap back while the
     // save is in flight.
@@ -401,7 +401,7 @@ export class ScheduleEditorCard extends LitElement {
     const bindingsOpen = this.expandedBindings.has(record.id);
     const groups = groupedBlocks(record);
     const binding = this.bindings[record.id];
-    const boundCount = binding?.entities.length ?? 0;
+    const boundCount = binding ? targetCount(binding.entities) : 0;
     return html`
       <div class="schedule">
         <div class="schedule-header">
@@ -431,7 +431,7 @@ export class ScheduleEditorCard extends LitElement {
             />
           </label>
           <ha-icon-button
-            .label=${boundCount > 0 ? `Controls ${boundCount} ${boundCount === 1 ? "entity" : "entities"}` : "Controls: none set"}
+            .label=${boundCount > 0 ? `Controls ${boundCount} ${boundCount === 1 ? "target" : "targets"}` : "Controls: none set"}
             class=${boundCount > 0 ? "has-binding" : ""}
             @click=${() => this.toggleBindingPanel(record.id)}
           >
@@ -480,7 +480,7 @@ export class ScheduleEditorCard extends LitElement {
     if (binding === undefined) {
       return html`<div class="binding-panel muted">Loading controls…</div>`;
     }
-    const entities = binding?.entities ?? [];
+    const entities = binding?.entities ?? { entity_id: [] };
     const recheck = binding?.recheckMinutes ?? 0;
     const conditionEntities = binding?.conditionEntities ?? [];
     return html`
@@ -489,9 +489,9 @@ export class ScheduleEditorCard extends LitElement {
           <span class="binding-label">Controls</span>
           <ha-selector
             .hass=${this.hass}
-            .selector=${{ entity: { domain: ["switch", "light"], multiple: true } }}
+            .selector=${{ target: { entity: { domain: ["switch", "light"] } } }}
             .value=${entities}
-            @value-changed=${(e: CustomEvent<{ value: string[] }>) =>
+            @value-changed=${(e: CustomEvent<{ value: EntityTarget }>) =>
               this.handleBindingChange(record, { entities: e.detail.value })}
           ></ha-selector>
         </div>

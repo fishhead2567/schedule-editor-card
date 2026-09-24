@@ -1,4 +1,18 @@
-import { GroupedBlock, HomeAssistant, ScheduleDays, ScheduleRecord, WEEKDAYS } from "./types";
+import { EntityTarget, GroupedBlock, HomeAssistant, ScheduleDays, ScheduleRecord, WEEKDAYS } from "./types";
+
+/** Total number of entity/device/area/label references in a target - used
+ * for the "Controls N" badge. Not a resolved entity count (a device or
+ * label could expand to any number of real entities) - just how many
+ * things were picked, which is honest about what this card can know
+ * without loading the entity/device registries. */
+export function targetCount(target: EntityTarget): number {
+  return (
+    (target.entity_id?.length ?? 0) +
+    (target.device_id?.length ?? 0) +
+    (target.area_id?.length ?? 0) +
+    (target.label_id?.length ?? 0)
+  );
+}
 
 /**
  * Neither of HA's two error shapes this card runs into are Error instances:

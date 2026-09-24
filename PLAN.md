@@ -1046,6 +1046,97 @@ source of truth):
   the fork's flagged "verify, don't assume" item on the empty-list
   trigger is confirmed clean.
 
+### Milestone 12 — Target selector (devices/areas/labels) for Controls, issue #6 (done 2026-09-24)
+
+Goal: let the binding panel's "Controls" picker accept a HA **label**
+(and devices/areas, for free) instead of only individual entities - see
+[issue #6](https://github.com/fishhead2567/schedule-editor-card/issues/6),
+filed after actually walking through the humidifier use case from
+Milestone 11 and hitting a real limit.
+
+**Scope decision, made with the user before building**: labels only for
+the "Controls" (target) picker, not "Force off while" (condition
+entities). Researched first and found the two are NOT symmetric: an
+action's `target:` field resolves label → device/area → entities
+natively, but the condition check's Jinja `label_entities()` function
+only returns entities labeled *directly* - a label applied to a device
+or area does not roll up to its entities there (confirmed against HA's
+own template-function docs). Shipping labels for conditions today would
+silently fail exactly when someone labels a device instead of each
+entity - a confusing partial feature rather than a real one. Left as a
+clearly-scoped-out follow-up in the issue rather than a TODO buried in
+code.
+
+**The real risk, bigger than "add labels" on its own**: the user has a
+real production binding today stored in the *old* shape
+(`target_entities: ["light.bed_light"]`, a plain entity-id array, from
+before this change). The blueprint is shared - updating it affects every
+automation using it immediately on next reload, before the card's UI is
+even touched. Handled by templating each `target:` sub-field
+individually rather than assuming the input's shape:
+```yaml
+target:
+  entity_id: "{{ (target_entities.entity_id if target_entities is mapping else target_entities) | default([], true) }}"
+  device_id: "{{ (target_entities.device_id if target_entities is mapping else []) | default([], true) }}"
+  area_id: "{{ (target_entities.area_id if target_entities is mapping else []) | default([], true) }}"
+  label_id: "{{ (target_entities.label_id if target_entities is mapping else []) | default([], true) }}"
+```
+so both the old plain-array shape and the new `{entity_id, device_id,
+area_id, label_id}` shape keep working, permanently - not just until the
+user happens to re-save through the new UI.
+
+**Reviewed by a fork before implementing.** Confirmed the `is mapping`
+branching and `default([], true)` fallbacks are sound for `None`/missing/
+empty-string cases, but flagged the one thing it could not verify from
+reading code alone: whether HA's `target:` schema actually receives a
+native Python list when each sub-field is independently templated as a
+bare `{{ }}` expression, rather than choking on it or stringifying the
+result - recommended live-testing three shapes (old array, new
+entity-only, new label-only) rather than assuming. Also caught a real
+gap in the planned `getBinding()` normalization: no fallback for
+`target_entities` being `undefined` (an in-progress card draft, not a
+stored-config case, but still a real gap) - fixed by making
+`normalizeTarget()` explicit about that case rather than only handling
+"array vs. object."
+
+**Implementation:**
+- `src/types.ts`: new `EntityTarget { entity_id?, device_id?, area_id?,
+  label_id?: string[] }`; `AutomationBinding.entities` becomes
+  `EntityTarget` (was `string[]`). `conditionEntities` untouched, per the
+  scope decision above.
+- `local/schedule_sync.yaml`: `target_entities` input moves from an
+  `entity` selector to a `target` selector; actions template each
+  `target:` sub-field as shown above.
+- `src/automation-api.ts`: `getBinding` normalizes old-array/new-object/
+  unset into a consistent `EntityTarget` via `normalizeTarget()`;
+  `saveBinding` needed no change - `binding.entities` already passes
+  through as whatever shape it is.
+- `src/schedule-editor-card.ts`: "Controls" `<ha-selector>` becomes a
+  `target` selector; the "Controls N" badge switches from `.entities.length`
+  (would no longer compile - `entities` isn't an array) to a new
+  `targetCount()` helper (`schedule-api.ts`, unit-tested) summing all
+  four id-list lengths - deliberately a reference count, not a resolved
+  entity count, since a label or device can't be sized without loading
+  the entity/device registries this card doesn't otherwise need.
+
+**Verified live**, three cases, each with a real forced-state-then-poke
+(not just "create binding, check state" - a config reload alone doesn't
+fire a trigger, so that pattern proves nothing about whether the
+automation logic actually ran, only what the entity's state already was):
+- **Old plain-array format** (`target_entities: ["light.bed_light"]`,
+  simulating the user's actual real-instance binding as it exists today)
+  - forced the light off, triggered a schedule transition, confirmed it
+  correctly turned back on. Protects existing production bindings.
+- **New format, entity_id only** - same poke pattern, confirmed correct.
+- **New format, label_id targeting a *device's* label** (created a label,
+  assigned it to `light.ceiling_lights`'s device via
+  `config/device_registry/update`, pointed `target_entities` at
+  `{label_id: [...]}`) - forced the light off, triggered a transition,
+  confirmed it turned back on. This is the case a plain entity picker
+  could never do, and the specific case the fork flagged as unverified -
+  confirmed working end to end, not just plausible from reading the
+  Jinja.
+
 ## Testing strategy
 
 Matches how HACS frontend cards are actually tested in practice (there is

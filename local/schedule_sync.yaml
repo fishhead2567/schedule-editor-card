@@ -1,8 +1,9 @@
 blueprint:
   name: Sync entities to schedule (restart-safe)
   description: >-
-    Keeps one or more switch/light entities (including groups) matched to a
-    schedule helper's on/off state. Re-checks on every Home Assistant
+    Keeps one or more switch/light entities (including groups, devices,
+    areas, or labels) matched to a schedule helper's on/off state.
+    Re-checks on every Home Assistant
     startup - so if HA is offline through a scheduled on->off (or off->on)
     boundary, the targets still end up in the correct state as soon as HA
     comes back, instead of staying stuck wherever they were left. An
@@ -25,13 +26,13 @@ blueprint:
         entity:
           domain: schedule
     target_entities:
-      name: Target entities (switch or light - group helpers work too)
+      name: Target (switch or light entities, devices, areas, or labels)
       selector:
-        entity:
-          domain:
-            - switch
-            - light
-          multiple: true
+        target:
+          entity:
+            domain:
+              - switch
+              - light
     skip_on_entities:
       name: Force off while any of these are 'on' (optional)
       description: >-
@@ -78,6 +79,7 @@ actions:
       schedule_entity: !input schedule_entity
       skip_entities: !input skip_on_entities
       recheck_interval: !input recheck_interval_minutes
+      target_entities: !input target_entities
   - variables:
       should_be_on: "{{ is_state(schedule_entity, 'on') }}"
       blocked: "{{ skip_entities | select('is_state', 'on') | list | count > 0 }}"
@@ -85,12 +87,24 @@ actions:
       recheck_due: >-
         {{ recheck_interval | int(0) > 0 and (now().minute % (recheck_interval | int(1))) == 0 }}
   - condition: "{{ not is_heartbeat or recheck_due }}"
+  # target_entities predates issue #6 for any binding saved before this
+  # version - back then it was a plain entity-id list (an `entity`
+  # selector), not the current target-selector's {entity_id, device_id,
+  # area_id, label_id} shape. Template each target: sub-field individually
+  # so both old and new saved values keep working without the user having
+  # to re-save every existing binding through the new UI.
   - if: "{{ should_be_on and not blocked }}"
     then:
       - action: homeassistant.turn_on
         target:
-          entity_id: !input target_entities
+          entity_id: "{{ (target_entities.entity_id if target_entities is mapping else target_entities) | default([], true) }}"
+          device_id: "{{ (target_entities.device_id if target_entities is mapping else []) | default([], true) }}"
+          area_id: "{{ (target_entities.area_id if target_entities is mapping else []) | default([], true) }}"
+          label_id: "{{ (target_entities.label_id if target_entities is mapping else []) | default([], true) }}"
     else:
       - action: homeassistant.turn_off
         target:
-          entity_id: !input target_entities
+          entity_id: "{{ (target_entities.entity_id if target_entities is mapping else target_entities) | default([], true) }}"
+          device_id: "{{ (target_entities.device_id if target_entities is mapping else []) | default([], true) }}"
+          area_id: "{{ (target_entities.area_id if target_entities is mapping else []) | default([], true) }}"
+          label_id: "{{ (target_entities.label_id if target_entities is mapping else []) | default([], true) }}"

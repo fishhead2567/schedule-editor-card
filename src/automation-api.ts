@@ -1,4 +1,4 @@
-import { AutomationBinding, HomeAssistant } from "./types";
+import { AutomationBinding, EntityTarget, HomeAssistant } from "./types";
 
 /**
  * A schedule entity is just an on/off signal; something has to actually
@@ -21,7 +21,10 @@ interface AutomationConfig {
     path: string;
     input?: {
       schedule_entity?: string;
-      target_entities?: string[];
+      // string[] here is the pre-issue-#6 shape (a plain entity-id list,
+      // from when target_entities was an `entity` selector, not `target`).
+      // Normalized to EntityTarget on read - see normalizeTarget().
+      target_entities?: EntityTarget | string[];
       skip_on_entities?: string[];
       recheck_interval_minutes?: number;
     };
@@ -32,6 +35,16 @@ function isNotFound(e: unknown): boolean {
   return typeof e === "object" && e !== null && (e as { status_code?: number }).status_code === 404;
 }
 
+/** Old saved bindings (before issue #6) stored target_entities as a plain
+ * entity-id array; new ones store the full EntityTarget shape. Handles
+ * both, plus the "never saved" case, so a pre-existing binding displays
+ * and re-saves correctly without the user having to redo it by hand. */
+function normalizeTarget(value: EntityTarget | string[] | undefined): EntityTarget {
+  if (!value) return { entity_id: [] };
+  if (Array.isArray(value)) return { entity_id: value };
+  return value;
+}
+
 export async function getBinding(hass: HomeAssistant, scheduleId: string): Promise<AutomationBinding | null> {
   try {
     const config = await hass.callApi<AutomationConfig>(
@@ -40,7 +53,7 @@ export async function getBinding(hass: HomeAssistant, scheduleId: string): Promi
     );
     const input = config.use_blueprint?.input ?? {};
     return {
-      entities: input.target_entities ?? [],
+      entities: normalizeTarget(input.target_entities),
       recheckMinutes: input.recheck_interval_minutes ?? 0,
       conditionEntities: input.skip_on_entities ?? [],
     };

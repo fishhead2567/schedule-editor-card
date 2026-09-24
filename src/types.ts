@@ -43,15 +43,35 @@ export interface CardConfig {
   entities?: string[];
 }
 
-/** What a schedule controls: entities on while active, off otherwise, plus
- * how aggressively to keep them in sync between transitions (0 = only at
- * transitions/startup, matching the underlying blueprint's default).
+/** HA's generic "target" shape - entities/devices/areas/labels together,
+ * as produced by an `ha-selector`'s `target` selector and accepted
+ * natively by an action's `target:` field (which resolves devices/areas/
+ * labels to their entities itself - no manual resolution needed on our
+ * side for this shape to work as a turn_on/turn_off target). */
+export interface EntityTarget {
+  entity_id?: string[];
+  device_id?: string[];
+  area_id?: string[];
+  label_id?: string[];
+}
+
+/** What a schedule controls: entities (or devices/areas/labels, via
+ * EntityTarget) on while active, off otherwise, plus how aggressively to
+ * keep them in sync between transitions (0 = only at transitions/startup,
+ * matching the underlying blueprint's default).
  * conditionEntities (binary_sensor/input_boolean) additionally gate the ON
  * state: if any are 'on', the target is forced off even during an active
  * block - required (not optional) so getBinding/saveBinding staying in
- * sync is a compile-time property, not something that can silently drift. */
+ * sync is a compile-time property, not something that can silently drift.
+ * conditionEntities is deliberately still a plain entity list, not an
+ * EntityTarget: the condition check needs is_state() per entity in Jinja,
+ * and label_entities() there only resolves labels applied directly to
+ * entities (not rolled up through a device/area's label) - unlike a
+ * target: field, which resolves all of that natively. Mixing that
+ * asymmetric behavior into the condition picker would be a silent
+ * footgun, so it's out of scope here (see issue #6's discussion). */
 export interface AutomationBinding {
-  entities: string[];
+  entities: EntityTarget;
   recheckMinutes: number;
   conditionEntities: string[];
 }

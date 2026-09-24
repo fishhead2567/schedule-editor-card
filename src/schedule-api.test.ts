@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { errorMessage, groupedBlocks } from "./schedule-api";
+import { errorMessage, groupedBlocks, targetCount } from "./schedule-api";
 import { ScheduleRecord } from "./types";
 
 function record(days: Partial<ScheduleRecord>): ScheduleRecord {
@@ -78,5 +78,18 @@ describe("groupedBlocks", () => {
 
   it("returns an empty list for a schedule with no blocks", () => {
     expect(groupedBlocks(record({}))).toEqual([]);
+  });
+});
+
+describe("targetCount", () => {
+  it("counts across entity/device/area/label references together", () => {
+    expect(
+      targetCount({ entity_id: ["light.a", "light.b"], device_id: ["dev1"], label_id: ["patio"] })
+    ).toBe(4);
+  });
+
+  it("returns 0 for an empty target", () => {
+    expect(targetCount({})).toBe(0);
+    expect(targetCount({ entity_id: [] })).toBe(0);
   });
 });
