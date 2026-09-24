@@ -36,6 +36,26 @@ export async function listSchedules(hass: HomeAssistant): Promise<ScheduleRecord
   return hass.connection.sendMessagePromise<ScheduleRecord[]>({ type: "schedule/list" });
 }
 
+/**
+ * A cheap fingerprint of every schedule.* entity's state - used to notice
+ * "something about the schedules changed" (one created/deleted elsewhere,
+ * or a block edited from another card/tab) purely from the `hass` object
+ * every card already receives on each state change, without polling
+ * `schedule/list` on a timer. Compared across `hass` updates; a change
+ * means it's worth re-fetching the full block data (not in `hass.states`)
+ * via `listSchedules`.
+ */
+export function scheduleEntitiesFingerprint(hass: HomeAssistant): string {
+  return Object.keys(hass.states)
+    .filter((id) => id.startsWith("schedule."))
+    .sort()
+    .map((id) => {
+      const s = hass.states[id];
+      return `${id}:${s.state}:${JSON.stringify(s.attributes)}`;
+    })
+    .join("|");
+}
+
 export async function createSchedule(
   hass: HomeAssistant,
   name: string,

@@ -1,7 +1,7 @@
 import { LitElement, html, css, TemplateResult, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { CardConfig, HomeAssistant, ScheduleRecord, Weekday } from "./types";
-import { daysOf, errorMessage, listSchedules } from "./schedule-api";
+import { daysOf, errorMessage, listSchedules, scheduleEntitiesFingerprint } from "./schedule-api";
 import { getColors, DEFAULT_COLOR } from "./user-data-api";
 import {
   addDaysToWeekday,
@@ -64,6 +64,11 @@ export class ScheduleTimelineCard extends LitElement {
   // zone if hass isn't ready yet, so this is never actually wrong, just
   // momentarily using the fallback rather than the server's real zone.
   private actualTodayWeekday: Weekday = "monday";
+  // Tracks the last-seen schedule.* entity fingerprint so a schedule
+  // created/edited/deleted elsewhere (another card, another tab, the
+  // Helpers UI) is picked up from the next `hass` update instead of
+  // requiring a manual page refresh - see `updated()` below.
+  private lastScheduleFingerprint = "";
 
   setConfig(config: CardConfig): void {
     this.config = { type: config.type, title: config.title, entities: config.entities };
@@ -71,6 +76,14 @@ export class ScheduleTimelineCard extends LitElement {
 
   getCardSize(): number {
     return 3 + this.schedules.length;
+  }
+
+  static getConfigElement(): HTMLElement {
+    return document.createElement("schedule-timeline-card-editor");
+  }
+
+  static getStubConfig(): CardConfig {
+    return { type: "custom:schedule-timeline-card" };
   }
 
   connectedCallback(): void {
@@ -86,6 +99,17 @@ export class ScheduleTimelineCard extends LitElement {
   disconnectedCallback(): void {
     super.disconnectedCallback();
     if (this.nowTimer) window.clearInterval(this.nowTimer);
+  }
+
+  protected updated(changedProperties: Map<string, unknown>): void {
+    super.updated(changedProperties);
+    if (changedProperties.has("hass") && this.hass) {
+      const fingerprint = scheduleEntitiesFingerprint(this.hass);
+      if (fingerprint !== this.lastScheduleFingerprint) {
+        this.lastScheduleFingerprint = fingerprint;
+        this.refresh();
+      }
+    }
   }
 
   private async refresh(): Promise<void> {
@@ -141,11 +165,11 @@ export class ScheduleTimelineCard extends LitElement {
           <div class="title-group">
             <div class="title">${this.config.title ?? "Timeline"}</div>
             <div class="subtitle">
-              <ha-icon-button title="Previous day" @click=${() => this.changeDay(-1)}>
+              <ha-icon-button label="Previous day" @click=${() => this.changeDay(-1)}>
                 <ha-icon icon="mdi:chevron-left"></ha-icon>
               </ha-icon-button>
               <span class="date-label">${this.dateLabel()}</span>
-              <ha-icon-button title="Next day" @click=${() => this.changeDay(1)}>
+              <ha-icon-button label="Next day" @click=${() => this.changeDay(1)}>
                 <ha-icon icon="mdi:chevron-right"></ha-icon>
               </ha-icon-button>
               ${!isToday ? html`<button class="today-link" @click=${() => this.goToday()}>Today</button>` : nothing}
@@ -171,12 +195,14 @@ export class ScheduleTimelineCard extends LitElement {
                   ${this.schedules.map((record) => this.renderTrack(record, viewedWeekday, isToday))}
                 </div>
                 <div class="overlay">
-                  ${HOURS.map((h) => html`<div class="grid-line" style="left:${(h / 24) * 100}%"></div>`)}
+                  ${HOURS.map(
+                    (h) => html`<div class="grid-line" aria-hidden="true" style="left:${(h / 24) * 100}%"></div>`
+                  )}
                   ${nowPct !== null
                     ? html`
-                        <div class="now-line" style="left:${nowPct}%"></div>
+                        <div class="now-line" aria-hidden="true" style="left:${nowPct}%"></div>
                         <div class="now-label" style="left:${nowPct}%">
-                          ${formatTimeLabel(new Date(), this.hass?.config?.time_zone)}
+                          Now, ${formatTimeLabel(new Date(), this.hass?.config?.time_zone)}
                         </div>
                       `
                     : nothing}
@@ -192,7 +218,13 @@ export class ScheduleTimelineCard extends LitElement {
     const color = this.colorOf(record.id);
     const nowMin = isToday ? currentMinutesInZone(this.hass?.config?.time_zone) : null;
     return html`
-      <button class="track-icon" title=${record.name} @click=${() => this.toggleTooltip(record.id)}>
+      <button
+        class="track-icon"
+        title=${record.name}
+        aria-label=${record.name}
+        aria-pressed=${this.activeTooltip === record.id}
+        @click=${() => this.toggleTooltip(record.id)}
+      >
         <ha-icon icon=${record.icon || "mdi:calendar-clock"}></ha-icon>
       </button>
       <div class="track-timeline">

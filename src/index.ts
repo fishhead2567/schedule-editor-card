@@ -3,3 +3,4 @@
 // resource) even though the repo now provides two custom elements.
 import "./schedule-editor-card";
 import "./schedule-timeline-card";
+import "./card-editor";

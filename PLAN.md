@@ -189,7 +189,7 @@ Goal: a working, tested, CI-green schedule CRUD card.
       Renaming a schedule's name is still not supported — not asked for,
       icon was the specific request.
 
-### Milestone 2 — First real release (done, with one deliberate exception)
+### Milestone 2 — First real release (done)
 Goal: prove the actual HACS distribution path works, not just CI.
 - [x] Tag `v0.1.0`, confirm `release.yml` produces a GitHub Release with
       `schedule-editor-card.js` attached — done, asset byte-for-byte matches
@@ -202,20 +202,13 @@ Goal: prove the actual HACS distribution path works, not just CI.
       `docs/screenshot.png`, set topics `home-assistant`, `hacs`,
       `lovelace`, `lovelace-card`, `home-automation`). Second run: 8/8
       checks pass.
-- [ ] **Deliberately not done**: an actual HACS "Add custom repository" →
-      install click-through on the dev instance. HACS's setup requires a
-      GitHub OAuth device-flow login (visit github.com/login/device, enter
-      a code, approve) — there's no API to complete that without a real
-      browser session tied to a logged-in GitHub account, and scripting a
-      login flow against a real service is exactly the category of action
-      this project avoids automating (same reasoning as never scripting
-      HA's own username/password login earlier in this work). The
-      validator above is the authoritative, correct-for-automation
-      substitute — it's the same tool HACS's own maintainers use to gate
-      real-world repos. A literal click-through install is a ~60-second
-      manual check anyone can do themselves whenever they want the final
-      "yes, exactly this button works" confirmation; not worth blocking
-      further work on.
+- [x] An actual HACS "Add custom repository" → install click-through was
+      deliberately not scripted on the dev instance (HACS's GitHub OAuth
+      device-flow login isn't something to automate, same reasoning as
+      never scripting HA's own login) — the validator above was treated as
+      the correct-for-automation substitute. The real click-through ended
+      up happening anyway, on the real instance, done by the user; see
+      below for what that surfaced and how it was resolved.
 - [x] Install on the real HA instance (192.168.1.206) as a custom
       repository — the user did this 2026-09-22. First attempt failed:
       "Repository structure for v0.1.0 is not compliant." Root cause:
@@ -234,22 +227,129 @@ Goal: prove the actual HACS distribution path works, not just CI.
       snapshot, and "CI passes on master" says nothing about whether an
       old tag still would** - if substantial work has landed since the
       last release, assume the tag is stale before assuming there's a
-      deeper problem. Re-attempt on the user's real instance pending as of
-      this writing.
+      deeper problem.
+- [x] Re-attempt on `v0.2.0`: same "Repository structure ... is not
+      compliant" error, but this time for a fresh, CI-validated tag —
+      disproved the stale-tag theory. Root cause found by reading HACS's
+      own source (`hacs/integration`, `repositories/plugin.py` vs
+      `integration.py`): the error string itself named the category —
+      `<Integration ...>` not `<Plugin ...>` — meaning HACS had this repo
+      classified as category **Integration** (which requires a
+      `custom_components/<domain>/manifest.json`, which this repo
+      correctly has none of) rather than **Dashboard**, because that's a
+      per-add choice made in HACS's own "add custom repository" dialog,
+      not something the repo itself declares. Confirmed 2026-09-23: user
+      re-added the repo with category explicitly set to Dashboard, it
+      validated clean. Milestone 2 is now fully done, including the real
+      click-through install this section previously deferred.
 
-### Milestone 3 — Polish
+### Milestone 3 — Polish (done)
 - [x] ~~Edit-in-place for existing blocks~~ — moved to and done under
       Milestone 1 (it's core CRUD completeness, not really "polish" in
       hindsight).
 - [x] ~~Dark theme / mobile viewport checks~~ — moved to and done under
       Milestone 1 for the same reason.
-- [ ] Visual config editor (`getConfigElement`) so the card can be added
-      through the dashboard UI picker without hand-written YAML.
-- [ ] Basic accessibility pass (this is genuinely UI-facing — hold for the
-      user's UI feedback pass rather than guessing at it).
-- [ ] Consider drag-to-create/resize on the timeline bars (nice-to-have,
-      not required — click + time-inputs already works; also hold for UI
-      feedback rather than building speculatively).
+- [x] Visual config editor (`getConfigElement`), done 2026-09-23. Both
+      cards take the same config shape (`type`/`title`/`entities`), so one
+      shared implementation (`src/card-editor.ts`, `ScheduleCardEditorBase`)
+      covers both, registered under two tag names
+      (`schedule-editor-card-editor`, `schedule-timeline-card-editor`) so
+      each card's `getConfigElement()` can request its own. Form: a plain
+      title `<input>` (matching the rest of the card's style, not
+      `ha-textfield`, to avoid depending on an unconfirmed global element)
+      plus an `<ha-selector>` entity picker filtered to `domain: "schedule"`
+      with `multiple: true`. Also added `getStubConfig()` on both cards.
+      Verified against a fresh disposable dev instance (recreated from
+      scratch specifically for this — the existing one's bind-mounted
+      `dev/config/` predated the editor work and had stale onboarding
+      state): registered the built resource, opened the dashboard's real
+      "Add card" picker, searched "Schedule", confirmed both cards show up
+      with their `window.customCards` name/description, selected "Schedule
+      Editor Card" - the visual editor rendered with a live preview pane,
+      typed into the Title field via the real input, and watched the
+      preview's header update to match instantly (proves `setConfig`,
+      the form, and `config-changed` all round-trip correctly - this is
+      HA's own generic card-editor dialog wrapper exercising our code, not
+      something we could fake). Confirmed the resulting config renders
+      correctly on an actual saved dashboard view for both cards. No
+      console errors at any point.
+      **Process note**: scripting the generic "Add to dashboard" ->
+      "Browse all cards" -> search -> pick flow with raw pixel coordinates
+      was fragile - a later attempt that reset the section to have no
+      heading card shifted every button's on-screen position, breaking a
+      previously-working coordinate sequence from the first click onward.
+      Prefer finding elements by id/attribute/exact text (as done for the
+      Title input and login form throughout this session) over hardcoded
+      coordinates wherever the target has one; coordinates are fine only
+      for the couple of controls (icon-only FABs, dialog tiles) with
+      nothing stable to select on.
+### UI feedback round 2 (2026-09-23)
+
+**Feedback:** "timeline needs a page refresh to show new schedules."
+
+**Root cause:** both cards fetch full schedule data (`schedule/list`)
+exactly once, in `connectedCallback()` - `hass` updates on every entity
+state change system-wide, but neither card was reacting to that beyond
+the "now" line timer. A schedule created/edited/deleted anywhere other
+than that same card instance's own save methods (another tab, the
+Helpers UI, or - as reported - the *other* card on the same dashboard,
+since editor and timeline are separate element instances) never
+triggered a re-fetch.
+
+**Fixed** in both cards (same root cause, same fix, applied to the
+editor card too even though only the timeline card was reported - it has
+identical architecture and would hit the same bug): added
+`scheduleEntitiesFingerprint(hass)` (`schedule-api.ts`) - a cheap string
+built from every `schedule.*` entity's id/state/attributes - compared on
+every `hass` update via a Lit `updated()` override; a change triggers
+`refresh()`. `hass.states` already reflects new/changed/deleted schedule
+entities immediately via the frontend's existing websocket subscription,
+so this needed no new subscription of our own, just noticing it.
+
+Verified live: loaded a dashboard with both cards, then created a new
+schedule via a direct `schedule/create` websocket call on the *same*
+loaded page (simulating "created elsewhere") without reloading -
+confirmed via screenshot that both cards picked it up within ~2.5s, no
+manual refresh.
+
+- [x] Basic accessibility pass, done 2026-09-23. Root cause of most gaps:
+      `<ha-icon-button title="...">` does nothing for accessibility (and
+      nothing visually either) - confirmed by reading HA frontend's own
+      `ha-icon-button.ts` source, which only ever reads a `.label` property
+      to derive both `aria-label` and its internal tooltip; the `title`
+      attribute we'd been passing was never read by the component at all.
+      Fixed by switching every `ha-icon-button` in both cards from
+      `title=` to `label=`/`.label=` (chevron expand/collapse, controls
+      plug, duplicate, delete, prev/next day). Also added: `aria-label` on
+      every icon-only or symbol-only native `<button>` (icon-change,
+      block-chip edit/delete, save "✓"/cancel "×", timeline track icon)
+      since a bare glyph or icon has no accessible name of its own;
+      `aria-label` on bare `<input>`s with no associated `<label
+      for>` (start/end time, color swatch, recheck-interval number);
+      `aria-pressed` on day-pill toggle buttons and the timeline's
+      track-icon tooltip toggle, so their on/off state is exposed
+      programmatically rather than only via a background-color class; and
+      `aria-hidden="true"` on purely decorative overlay elements (now-line,
+      now-marker, timeline grid-lines) that duplicate information already
+      available elsewhere as text.
+      No custom keyboard-handling code was needed anywhere - every
+      interactive element in both cards was already a real `<button>` or
+      `<input>` (never a `<div onclick>` masquerading as one), so native
+      Tab/Enter/Space keyboard operability was already correct; this pass
+      was purely about accessible naming and state exposure.
+      Verified live via Chrome's real accessibility tree
+      (`page.accessibility.snapshot()`), not just visual inspection: every
+      previously silent icon-only control now reports a real name
+      ("Show weekly view", "Change icon", "Controls: none set",
+      "Duplicate", "Delete", "Edit block 09:00 to 10:00", "Previous day",
+      "Next day", the schedule's own name for its timeline track icon);
+      day pills report `pressed: true` correctly for the seeded Monday
+      block and `false` elsewhere; a pure Tab-key walk (no mouse) reached
+      every control in visual order with no dead ends.
+- [x] Consider drag-to-create/resize on the timeline bars — user confirmed
+      2026-09-23 to defer rather than build now; filed as
+      [issue #4](https://github.com/fishhead2567/schedule-editor-card/issues/4)
+      for later instead of leaving it an unstated maybe.
 
 ### UI feedback round 1 (2026-09-11, real user review of the dev instance)
 

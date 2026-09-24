@@ -1,7 +1,7 @@
 import { LitElement, html, css, TemplateResult, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { AutomationBinding, CardConfig, GroupedBlock, HomeAssistant, ScheduleDays, ScheduleRecord, WEEKDAYS, Weekday } from "./types";
-import { createSchedule, daysOf, deleteSchedule, errorMessage, groupedBlocks, listSchedules, updateSchedule, emptyDays } from "./schedule-api";
+import { createSchedule, daysOf, deleteSchedule, errorMessage, groupedBlocks, listSchedules, scheduleEntitiesFingerprint, updateSchedule, emptyDays } from "./schedule-api";
 import { deleteBinding, getBinding, saveBinding } from "./automation-api";
 import { DEFAULT_COLOR, getColors, setColor } from "./user-data-api";
 import { currentMinutesInZone, hasOverlap, percentOfDay, todayWeekdayInZone, toMinutes } from "./time-utils";
@@ -59,6 +59,10 @@ export class ScheduleEditorCard extends LitElement {
   // zone if hass isn't ready yet, so this is never actually wrong, just
   // momentarily using the fallback rather than the server's real zone.
   private todayWeekday: Weekday = "monday";
+  // See scheduleEntitiesFingerprint / updated() below - lets an external
+  // change (another tab, the Helpers UI, a second card instance) show up
+  // here without a manual page refresh.
+  private lastScheduleFingerprint = "";
 
   setConfig(config: CardConfig): void {
     this.config = { type: config.type, title: config.title, entities: config.entities };
@@ -66,6 +70,14 @@ export class ScheduleEditorCard extends LitElement {
 
   getCardSize(): number {
     return 2 + this.schedules.length * 2;
+  }
+
+  static getConfigElement(): HTMLElement {
+    return document.createElement("schedule-editor-card-editor");
+  }
+
+  static getStubConfig(): CardConfig {
+    return { type: "custom:schedule-editor-card" };
   }
 
   connectedCallback(): void {
@@ -85,6 +97,17 @@ export class ScheduleEditorCard extends LitElement {
   disconnectedCallback(): void {
     super.disconnectedCallback();
     if (this.nowTimer) window.clearInterval(this.nowTimer);
+  }
+
+  protected updated(changedProperties: Map<string, unknown>): void {
+    super.updated(changedProperties);
+    if (changedProperties.has("hass") && this.hass) {
+      const fingerprint = scheduleEntitiesFingerprint(this.hass);
+      if (fingerprint !== this.lastScheduleFingerprint) {
+        this.lastScheduleFingerprint = fingerprint;
+        this.refresh();
+      }
+    }
   }
 
   private async refresh(): Promise<void> {
@@ -383,13 +406,14 @@ export class ScheduleEditorCard extends LitElement {
       <div class="schedule">
         <div class="schedule-header">
           <ha-icon-button
-            title=${expanded ? "Hide weekly view" : "Show weekly view"}
+            .label=${expanded ? "Hide weekly view" : "Show weekly view"}
             @click=${() => this.toggleTimeline(record.id)}
           >
             <ha-icon icon=${expanded ? "mdi:chevron-down" : "mdi:chevron-right"}></ha-icon>
           </ha-icon-button>
           <button
             class="icon-button"
+            aria-label="Change icon"
             title="Change icon"
             @click=${() => this.toggleIconEditor(record.id)}
           >
@@ -401,21 +425,22 @@ export class ScheduleEditorCard extends LitElement {
           <label class="color-swatch" title="Change color" style="background:${this.colorOf(record.id)}">
             <input
               type="color"
+              aria-label="Change color"
               .value=${this.colorOf(record.id)}
               @input=${(e: Event) => this.handleColorChange(record.id, (e.target as HTMLInputElement).value)}
             />
           </label>
           <ha-icon-button
-            title=${boundCount > 0 ? `Controls ${boundCount} ${boundCount === 1 ? "entity" : "entities"}` : "Controls: none set"}
+            .label=${boundCount > 0 ? `Controls ${boundCount} ${boundCount === 1 ? "entity" : "entities"}` : "Controls: none set"}
             class=${boundCount > 0 ? "has-binding" : ""}
             @click=${() => this.toggleBindingPanel(record.id)}
           >
             <ha-icon icon="mdi:power-plug-outline"></ha-icon>
           </ha-icon-button>
-          <ha-icon-button @click=${() => this.handleDuplicate(record)} title="Duplicate">
+          <ha-icon-button @click=${() => this.handleDuplicate(record)} label="Duplicate">
             <ha-icon icon="mdi:content-copy"></ha-icon>
           </ha-icon-button>
-          <ha-icon-button @click=${() => this.handleDelete(record)} title="Delete">
+          <ha-icon-button @click=${() => this.handleDelete(record)} label="Delete">
             <ha-icon icon="mdi:delete"></ha-icon>
           </ha-icon-button>
         </div>
@@ -473,6 +498,7 @@ export class ScheduleEditorCard extends LitElement {
           <span class="binding-label">Recheck every</span>
           <input
             type="number"
+            aria-label="Recheck interval in minutes, 0 for only at transitions and startup"
             min="0"
             max="60"
             .value=${String(recheck)}
@@ -496,6 +522,8 @@ export class ScheduleEditorCard extends LitElement {
             <button
               class="day-pill ${activeDays.includes(d) ? "on" : ""}"
               title=${DAY_LABEL[d]}
+              aria-label=${DAY_LABEL[d]}
+              aria-pressed=${activeDays.includes(d)}
               @click=${() => onToggle(d)}
             >
               ${DAY_PILL_LABEL[d]}
@@ -518,6 +546,7 @@ export class ScheduleEditorCard extends LitElement {
         <div class="block-chip editing">
           <input
             type="time"
+            aria-label="Start time"
             .value=${this.editBlockDraft.from}
             @change=${(e: Event) =>
               (this.editBlockDraft = { ...this.editBlockDraft, from: (e.target as HTMLInputElement).value })}
@@ -525,12 +554,13 @@ export class ScheduleEditorCard extends LitElement {
           <span>–</span>
           <input
             type="time"
+            aria-label="End time"
             .value=${this.editBlockDraft.to}
             @change=${(e: Event) =>
               (this.editBlockDraft = { ...this.editBlockDraft, to: (e.target as HTMLInputElement).value })}
           />
-          <button title="Save" @click=${() => this.handleSaveEditGroup(record, group)}>✓</button>
-          <button title="Cancel" @click=${() => this.handleCancelEditGroup()}>×</button>
+          <button title="Save" aria-label="Save" @click=${() => this.handleSaveEditGroup(record, group)}>✓</button>
+          <button title="Cancel" aria-label="Cancel" @click=${() => this.handleCancelEditGroup()}>×</button>
           ${pills}
         </div>
       `;
@@ -538,11 +568,22 @@ export class ScheduleEditorCard extends LitElement {
 
     return html`
       <div class="block-chip">
-        <button class="chip-text" title="Click to edit time" @click=${() => this.handleStartEditGroup(record, group)}>
+        <button
+          class="chip-text"
+          title="Click to edit time"
+          aria-label="Edit block ${group.from.slice(0, 5)} to ${group.to.slice(0, 5)}"
+          @click=${() => this.handleStartEditGroup(record, group)}
+        >
           ${group.from.slice(0, 5)}–${group.to.slice(0, 5)}
         </button>
         ${pills}
-        <button title="Delete" @click=${() => this.handleDeleteGroup(record, group)}>×</button>
+        <button
+          title="Delete"
+          aria-label="Delete block ${group.from.slice(0, 5)} to ${group.to.slice(0, 5)}"
+          @click=${() => this.handleDeleteGroup(record, group)}
+        >
+          ×
+        </button>
       </div>
     `;
   }
@@ -553,12 +594,14 @@ export class ScheduleEditorCard extends LitElement {
       <div class="add-block">
         <input
           type="time"
+          aria-label="New block start time"
           .value=${draft.from}
           @change=${(e: Event) => this.updateDraftTime(record.id, { from: (e.target as HTMLInputElement).value })}
         />
         <span>to</span>
         <input
           type="time"
+          aria-label="New block end time"
           .value=${draft.to}
           @change=${(e: Event) => this.updateDraftTime(record.id, { to: (e.target as HTMLInputElement).value })}
         />
@@ -588,8 +631,8 @@ export class ScheduleEditorCard extends LitElement {
           )}
           ${isToday
             ? html`
-                <div class="now-marker" style="left:${nowPct}%" title="Now"></div>
-                <div class="now-line" style="left:${nowPct}%"></div>
+                <div class="now-marker" style="left:${nowPct}%" title="Now" aria-hidden="true"></div>
+                <div class="now-line" style="left:${nowPct}%" aria-hidden="true"></div>
               `
             : nothing}
         </div>
