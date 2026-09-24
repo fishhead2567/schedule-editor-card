@@ -45,10 +45,15 @@ export interface CardConfig {
 
 /** What a schedule controls: entities on while active, off otherwise, plus
  * how aggressively to keep them in sync between transitions (0 = only at
- * transitions/startup, matching the underlying blueprint's default). */
+ * transitions/startup, matching the underlying blueprint's default).
+ * conditionEntities (binary_sensor/input_boolean) additionally gate the ON
+ * state: if any are 'on', the target is forced off even during an active
+ * block - required (not optional) so getBinding/saveBinding staying in
+ * sync is a compile-time property, not something that can silently drift. */
 export interface AutomationBinding {
   entities: string[];
   recheckMinutes: number;
+  conditionEntities: string[];
 }
 
 // Minimal slice of the HA frontend's hass object this card relies on.

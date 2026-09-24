@@ -962,6 +962,90 @@ was left alone for over a week under ordinary operation and only
 inspected after the fact, closer to how the real deployment will actually
 be used than any of the deliberate force-and-check tests were.
 
+### Milestone 11 — Boolean condition gating, issue #3 (done 2026-09-24)
+
+Goal: let a schedule's control of its bound entities be additionally
+gated by a boolean condition (e.g. don't run a humidifier while a
+`binary_sensor` says humidity is already too high) - see
+[issue #3](https://github.com/fishhead2567/schedule-editor-card/issues/3).
+
+**Real discovery before writing any code**: `local/schedule_sync.yaml`
+already had a half-built version of this. Its `skip_on_entities` blueprint
+input and the `blocked` action variable already existed - but nothing
+triggered on it changing (only the schedule entity, HA startup, and the
+heartbeat did), it only ever *skipped* turning on rather than forcing off
+an already-on target, and it was never exposed anywhere: `saveBinding()`
+hardcoded `skip_on_entities: []` on every save, `getBinding()` never read
+it back at all, and the card's binding panel had no UI for it. So this
+was a completion-and-exposure task, not new logic from scratch.
+
+**Confirmed with the user before building**: when the schedule is active
+but a condition entity blocks it, force the target off (not just refrain
+from turning it on) - matches the humidifier example exactly and is
+symmetric with how "schedule inactive" already forces off. Since the
+field was never exposed via the UI, no existing binding could be relying
+on the old skip-only behavior - zero backward-compat risk.
+
+**Reviewed by a fork before implementing** (per explicit request) - found
+one real issue worth planning around: `getBinding()` not reading back
+`skip_on_entities` would have caused editing an existing binding to
+silently wipe its saved conditions on next save, since `handleBindingChange`
+does a full resave rather than a partial patch. Fixed by making
+`conditionEntities` a **required** field on `AutomationBinding` (not
+optional) specifically so this class of get/save asymmetry is a
+compile-time error, not a runtime data-loss bug. The fork also flagged the
+blueprint's `choose`→`if/else` collapse as correct boolean algebra (`should
+be on and not blocked` → ON, else → OFF is a true dichotomy covering the
+existing `should_be_on` case and the new force-off case together), the
+heartbeat-gating condition as unaffected (it gates the whole action
+sequence on `is_heartbeat`, not just the choose block, so a new trigger
+with `trigger.id != 'heartbeat'` passes it exactly like the existing
+schedule-entity trigger already does), and flagged one thing to verify
+live rather than assume: whether a `state` trigger with an empty
+`entity_id` list (the default, for every schedule not using this feature)
+reloads and behaves cleanly.
+
+**Implementation:**
+- `local/schedule_sync.yaml`: added a `trigger: state, entity_id: !input
+  skip_on_entities` alongside the existing schedule-entity trigger, so a
+  condition change is picked up immediately rather than waiting for the
+  next transition/heartbeat/restart. Collapsed the two-branch `choose`
+  (which had a silent third do-nothing case for "should be on and
+  blocked") into a two-way `if`/`else`, adding the force-off. Updated the
+  blueprint's own description text and the `skip_on_entities` input's
+  name/description, since both previously described skip-only behavior.
+- `src/types.ts`: `AutomationBinding` gets a required `conditionEntities:
+  string[]`.
+- `src/automation-api.ts`: `getBinding` now reads `input.skip_on_entities`
+  back (previously silently dropped despite `AutomationConfig` already
+  typing the field); `saveBinding` writes `binding.conditionEntities`
+  instead of a hardcoded `[]`.
+- `src/schedule-editor-card.ts`: binding panel gets a second `<ha-selector>`
+  ("Force off while", domain `binary_sensor`/`input_boolean`, multiple),
+  wired through the existing `handleBindingChange`; updated the panel's
+  empty-binding fallback object to include `conditionEntities: []`.
+
+**Verified live** against the dev instance, exercising the real card code
+path (`handleBindingChange` → `saveBinding` → REST config API), not a
+hand-crafted automation config: created an always-active schedule, bound
+it to `light.bed_light` with `input_boolean.test_condition` as the
+condition, and confirmed via direct entity-state checks (not screenshots -
+this run's Puppeteer session was intermittently doing full page
+reloads for unrelated reasons, so state-API checks were the reliable
+source of truth):
+- Condition on → light off (blocked).
+- Condition back off → light on again **within ~2.5s with no page
+  reload and no automation reload in between** - proves the new
+  condition-entity trigger, not just the heartbeat, is what's driving
+  the reaction.
+- Schedule made inactive (blocks removed) → light off regardless of the
+  condition's state - confirms the pre-existing "schedule inactive
+  forces off" path still works unchanged.
+- Separately, a second schedule bound with `skip_on_entities: []` (the
+  default every other schedule will have) reloaded and ran correctly -
+  the fork's flagged "verify, don't assume" item on the empty-list
+  trigger is confirmed clean.
+
 ## Testing strategy
 
 Matches how HACS frontend cards are actually tested in practice (there is

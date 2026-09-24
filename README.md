@@ -105,6 +105,19 @@ matters more than respecting an override (e.g. a valve left open), set a
 recheck interval and it'll be corrected within roughly that many minutes
 instead.
 
+**Gating on another condition:** the same panel has a second picker,
+"Force off while" — pick one or more `binary_sensor`/`input_boolean`
+entities, and the target is forced off (even during an otherwise-active
+schedule block) any time one of them is `on`, re-evaluated the moment
+that entity's state changes rather than waiting for the next transition.
+The intended use is a helper that represents "don't run right now" as a
+boolean: e.g. a HA **Threshold** helper turning `sensor.humidity` +
+a threshold into a `binary_sensor`, so a humidifier bound to a schedule
+won't run — or will actively shut off if it's already running — while
+it's already too humid, regardless of what the schedule itself says.
+Leave it empty (the default) for a schedule that should just follow its
+own on/off state with no extra condition.
+
 You'll need the blueprint itself installed once per Home Assistant
 instance: copy [`local/schedule_sync.yaml`](local/schedule_sync.yaml) into
 your `config/blueprints/automation/local/` directory. (A one-click My Home

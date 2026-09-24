@@ -42,6 +42,7 @@ export async function getBinding(hass: HomeAssistant, scheduleId: string): Promi
     return {
       entities: input.target_entities ?? [],
       recheckMinutes: input.recheck_interval_minutes ?? 0,
+      conditionEntities: input.skip_on_entities ?? [],
     };
   } catch (e) {
     if (isNotFound(e)) return null;
@@ -62,7 +63,7 @@ export async function saveBinding(
       input: {
         schedule_entity: `schedule.${scheduleId}`,
         target_entities: binding.entities,
-        skip_on_entities: [],
+        skip_on_entities: binding.conditionEntities,
         recheck_interval_minutes: binding.recheckMinutes,
       },
     },

@@ -5,9 +5,11 @@ blueprint:
     schedule helper's on/off state. Re-checks on every Home Assistant
     startup - so if HA is offline through a scheduled on->off (or off->on)
     boundary, the targets still end up in the correct state as soon as HA
-    comes back, instead of staying stuck wherever they were left. Turning
-    OFF always happens unconditionally; an optional skip condition only
-    ever blocks turning ON.
+    comes back, instead of staying stuck wherever they were left. An
+    optional condition can additionally gate the ON state: if any of those
+    entities are 'on', the target is forced off even during an otherwise-
+    active schedule block, and re-evaluated the moment the condition
+    itself changes - not just at the next transition/heartbeat/restart.
 
     Optionally also rechecks on a fixed interval (not just at schedule
     transitions/startup) to correct drift from a manual override or
@@ -31,7 +33,13 @@ blueprint:
             - light
           multiple: true
     skip_on_entities:
-      name: Skip turning ON if any of these are 'on' (optional)
+      name: Force off while any of these are 'on' (optional)
+      description: >-
+        Overrides the schedule while any of these are 'on', turning the
+        target off (and keeping it off) until they're all 'off' again -
+        e.g. a humidity sensor's "too high" binary_sensor, so a humidifier
+        bound to a schedule won't run (or will actively shut off) while
+        it's already too humid, regardless of the schedule's own state.
       default: []
       selector:
         entity:
@@ -57,6 +65,8 @@ blueprint:
 triggers:
   - trigger: state
     entity_id: !input schedule_entity
+  - trigger: state
+    entity_id: !input skip_on_entities
   - trigger: homeassistant
     event: start
   - trigger: time_pattern
@@ -75,14 +85,12 @@ actions:
       recheck_due: >-
         {{ recheck_interval | int(0) > 0 and (now().minute % (recheck_interval | int(1))) == 0 }}
   - condition: "{{ not is_heartbeat or recheck_due }}"
-  - choose:
-      - conditions: "{{ should_be_on and not blocked }}"
-        sequence:
-          - action: homeassistant.turn_on
-            target:
-              entity_id: !input target_entities
-      - conditions: "{{ not should_be_on }}"
-        sequence:
-          - action: homeassistant.turn_off
-            target:
-              entity_id: !input target_entities
+  - if: "{{ should_be_on and not blocked }}"
+    then:
+      - action: homeassistant.turn_on
+        target:
+          entity_id: !input target_entities
+    else:
+      - action: homeassistant.turn_off
+        target:
+          entity_id: !input target_entities

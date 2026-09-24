@@ -232,7 +232,7 @@ export class ScheduleEditorCard extends LitElement {
   }
 
   private async handleBindingChange(record: ScheduleRecord, patch: Partial<AutomationBinding>): Promise<void> {
-    const current = this.bindings[record.id] ?? { entities: [], recheckMinutes: 0 };
+    const current = this.bindings[record.id] ?? { entities: [], recheckMinutes: 0, conditionEntities: [] };
     const next: AutomationBinding = { ...current, ...patch };
     // Optimistic update so the picker doesn't visually snap back while the
     // save is in flight.
@@ -482,6 +482,7 @@ export class ScheduleEditorCard extends LitElement {
     }
     const entities = binding?.entities ?? [];
     const recheck = binding?.recheckMinutes ?? 0;
+    const conditionEntities = binding?.conditionEntities ?? [];
     return html`
       <div class="binding-panel">
         <div class="binding-row">
@@ -493,6 +494,20 @@ export class ScheduleEditorCard extends LitElement {
             @value-changed=${(e: CustomEvent<{ value: string[] }>) =>
               this.handleBindingChange(record, { entities: e.detail.value })}
           ></ha-selector>
+        </div>
+        <div class="binding-row">
+          <span class="binding-label">Force off while</span>
+          <ha-selector
+            .hass=${this.hass}
+            .selector=${{ entity: { domain: ["binary_sensor", "input_boolean"], multiple: true } }}
+            .value=${conditionEntities}
+            @value-changed=${(e: CustomEvent<{ value: string[] }>) =>
+              this.handleBindingChange(record, { conditionEntities: e.detail.value })}
+          ></ha-selector>
+        </div>
+        <div class="binding-row" ?hidden=${conditionEntities.length === 0}>
+          <span class="binding-label"></span>
+          <span class="muted">on, regardless of the schedule (e.g. "humidity too high")</span>
         </div>
         <div class="binding-row">
           <span class="binding-label">Recheck every</span>
